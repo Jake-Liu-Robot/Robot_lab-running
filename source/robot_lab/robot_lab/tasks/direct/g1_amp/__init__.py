@@ -7,7 +7,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 
 """
-AMP G1 dance environment.
+AMP G1 environments (dance + running).
 """
 
 import gymnasium as gym
@@ -25,5 +25,15 @@ gym.register(
     kwargs={
         "env_cfg_entry_point": f"{__name__}.g1_amp_env_cfg:G1AmpDanceEnvCfg",
         "skrl_amp_cfg_entry_point": f"{agents.__name__}:skrl_dance_amp_cfg.yaml",
+    },
+)
+
+gym.register(
+    id="RobotLab-Isaac-G1-AMP-Run-Direct-v0",
+    entry_point=f"{__name__}.g1_amp_run_env:G1AmpRunEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.g1_amp_run_env_cfg:G1AmpRunEnvCfg",
+        "skrl_amp_cfg_entry_point": f"{agents.__name__}:skrl_run_amp_cfg.yaml",
     },
 )
