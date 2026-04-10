@@ -182,41 +182,47 @@ robot_lab/
 
 ### Sprint vs Run 分析
 
+⚠️ **以下速度已修正为 30fps 计算值**（原分析误用 60fps，速度被高估 2 倍）
+
 | | Sprint (sprint1_*) | Run (run1_*, run2_*) |
 |--|---------------------|---------------------|
 | 运动模式 | 间歇冲刺（冲-停-冲） | 持续跑步 |
-| 平均速度 | ~1.9 m/s（大量静止拉低） | 2.4-3.1 m/s |
-| 峰值速度 | 6-9 m/s（远超目标） | 5-7 m/s |
-| 单次跑步持续 | 2-3s | 5-50+s |
-| 完整周期(站→跑→站) | 3-6s，跑步段太短 | 5-50+s，包含自然加减速 |
-| **适合目标** | ❌ 冲刺太短太快 | ✅ 持续跑步+自然过渡 |
+| 平均速度 | ~1.0 m/s（大量静止拉低） | 1.2-1.5 m/s |
+| 峰值速度 | 4.5-4.9 m/s（短暂） | 3.3-4.4 m/s |
+| 最佳10s窗口均速 | ~2.0 m/s | 2.3-2.7 m/s |
+| 完整周期(站→跑→站) | 短冲刺+长静止 | 10-20+s，包含自然加减速 |
+| **适合目标** | ⚠️ 有4m/s峰值但不持续 | ✅ 持续跑步+自然过渡 |
 
-### 最佳候选（目标：站立→加速→持续~4m/s→减速→停止）
+### 最佳候选（目标：站立→加速→持续跑步→减速→停止）
 
-| 排名 | 文件 | 帧范围 | 时长 | 峰值 | 持续跑(>3m/s) | 特点 |
-|------|------|--------|------|------|--------------|------|
-| **1** | **run2_subject1.csv** | [1967-2532] | **9.4s** | 6.6 m/s | 8.6s | 完美周期：加速→4-5m/s稳态→减速，时长适中 |
-| 2 | run2_subject1.csv | [150-968] | 13.6s | 5.4 m/s | 12.0s | 较长但速度偏低(3-4m/s) |
-| 3 | run2_subject4.csv | [78-2340] | 37.7s | 6.8 m/s | 31.4s | 很长但中间有速度波动 |
-| 4 | run2_subject1.csv | [5711-7316] | 26.8s | 7.5 m/s | 22.6s | 长但峰值高 |
+⚠️ **帧率修正（2026-04-09）**：LAFAN1 实际为 **30fps**（非 60fps），之前所有速度分析被高估 2 倍。
+
+| 排名 | 文件 | 帧范围 | 时长 | 峰值 | 平均速度 | 特点 |
+|------|------|--------|------|------|---------|------|
+| **1** | **run2_subject1.csv** | **[1943-2564]** | **20.7s** | 3.3 m/s | 2.2 m/s | 完整站→跑→站周期，最稳定持续跑步 |
+| 2 | run2_subject4.csv | [3505-3764] | 8.6s | 3.4 m/s | 2.7 m/s | 最快持续段，但无完整起停 |
+| 3 | sprint1_subject4.csv | [5950-6250] | 10s | 4.4 m/s | 2.0 m/s | 有4+m/s峰值但冲-停模式 |
 
 ### 数据决策
 
-**选择 `run2_subject1.csv` 帧 [1967-2532]（9.4s）**：
-- 完整周期：静止(0.7s) → 加速(0.3s) → 持续跑步 4-6 m/s(8.6s) → 减速停止(0.4s)
-- 时长匹配 AMP episode_length=10s
-- 速度集中在 4-5 m/s，贴近目标
+**选择 `run2_subject1.csv` 帧 [1943-2564]（20.7s, 30fps）**：
+- 完整周期：静止(0.8s) → 加速 → 持续跑步 2-3.3 m/s(~18s) → 减速 → 静止(0.5s)
+- 时长匹配 episode_length=20s
+- 实际速度 2-3.3 m/s（非之前错误的 4-6 m/s）
 - **两条管线用同一段数据**，通过不同转换工具生成各自格式
+- AMP 管线通过速度任务奖励测试能否泛化到 4 m/s
 
 ### 数据转换流程
 
 ```
-run2_subject1.csv [帧 1967-2532, 60fps]
+run2_subject1.csv [帧 1943-2564, 30fps, 20.7s]
     │
     ├── csv_to_npz.py (Isaac Sim FK, RunPod) → BeyondMimic NPZ
+    │     --input_fps 30 --frame_range 1943 2564
     │     keys: joint_pos, joint_vel, body_pos_w, body_quat_w, ...
     │
-    └── csv2npz.py (Pinocchio FK, RunPod/本地) → AMP NPZ
+    └── csv2npz_run.py (Pinocchio FK, RunPod) → AMP NPZ
+          --start 1943 --end 2564 --fps 30
           keys: dof_positions, dof_velocities, body_positions, body_rotations, ...
 ```
 
@@ -305,7 +311,7 @@ cp lafan1_g1/g1/run2_subject1.csv \
   source/robot_lab/robot_lab/tasks/manager_based/beyondmimic/config/g1/motion/
 /isaac-sim/python.sh scripts/tools/beyondmimic/csv_to_npz.py \
   -f source/robot_lab/robot_lab/tasks/manager_based/beyondmimic/config/g1/motion/run2_subject1.csv \
-  --input_fps 60 --frame_range 1968 2533 --headless
+  --input_fps 30 --frame_range 1943 2564 --headless
 ```
 
 ### 训练（RunPod）
@@ -341,112 +347,68 @@ cp lafan1_g1/g1/run2_subject1.csv \
 
 ---
 
-## 路线 B：AMP G1 跑步
+## 路线 B：AMP G1 跑步（已实现）
 
-### 已注册任务（当前为 Dance）
+### 已注册任务
 
 ```
-ID:    RobotLab-Isaac-G1-AMP-Dance-Direct-v0
-入口:  robot_lab.tasks.direct.amp...:G1AmpEnv（Direct 工作流）
-RL:    skrl AMP（仅限 skrl，不可用 rsl_rl）
+Dance:  RobotLab-Isaac-G1-AMP-Dance-Direct-v0  (原有)
+Run:    RobotLab-Isaac-G1-AMP-Run-Direct-v0    (新增)
+入口:   G1AmpRunEnv (继承 G1AmpEnv, Direct 工作流)
+RL:     skrl AMP（仅限 skrl，不可用 rsl_rl）
 ```
 
-### AMP 判别器默认配置
+### AMP-Run 核心设计
 
-| 参数 | 值 |
-|------|---|
-| 隐藏层 | [1024, 512] ReLU |
-| discriminator_reward_scale | 2.0 |
-| discriminator_gradient_penalty_scale | 5.0 |
-| task_reward_weight | **0.0**（Dance 纯风格） |
-| style_reward_weight | **1.0** |
-| num_amp_observations | 2（当前 + 1 历史帧） |
+**三网络架构**：Policy [1024,512] + Value [1024,512] + Discriminator [1024,512]
 
-风格奖励：`r = max(1 - 0.25·(1 - D_logit)², 0.0001) × 2.0`
+**奖励组合**（skrl 内部）：
+```
+r_total = 0.5 × r_task (env返回) + 0.5 × r_style (判别器)
+```
 
-### 创建 AMP-Run 任务（本地编辑，RunPod 训练）
+**环境 task_reward** (`g1_amp_run_env.py`):
+```
+velocity_tracking:  1.5 × exp(-4·(v_forward - 4.0)²)  ← 推向 4 m/s
+imitation (降权):   joint_pos(1.0) + joint_vel(0.5) + root_pos(0.5) + root_rot(0.25)
+penalties:          action_l2(-0.1) + joint_limits(-10) + joint_acc(-1e-6) + joint_vel(-0.001)
+```
 
-#### Step 1：复制 Dance 配置（本地）
+**判别器 style_reward**:
+```
+输入: amp_obs = 3帧 × 105维 = 315维 (关节角+速度+body位置+朝向+进度)
+正样本: 参考运动数据 (学习"跑步风格")
+负样本: 策略产生的运动
+r_style = 2.0 × max(1 - 0.25·(1 - D_logit)², 0.0001)
+```
+
+### 已实现的文件
+
+| 文件 | 作用 |
+|------|------|
+| `g1_amp/__init__.py` | 注册 Dance + Run 两个任务 |
+| `g1_amp/g1_amp_run_env.py` | 继承 G1AmpEnv，添加速度奖励 |
+| `g1_amp/g1_amp_run_env_cfg.py` | 配置：target_vel=4.0, episode=20s |
+| `g1_amp/agents/skrl_run_amp_cfg.yaml` | task_w=0.5, style_w=0.5 |
+| `g1_amp/motions/csv2npz_run.py` | 参数化数据转换脚本 |
+
+### 训练（RunPod）
 
 ```bash
-cd source/robot_lab/robot_lab/tasks/direct/amp/config/
-cp -r unitree_g1 unitree_g1_run
-```
+# AMP 数据转换
+/isaac-sim/python.sh -m pip install pinocchio
+/isaac-sim/python.sh source/robot_lab/robot_lab/tasks/direct/g1_amp/motions/csv2npz_run.py
 
-#### Step 2：添加速度跟踪奖励（本地编辑）
-
-在 `unitree_g1_run/g1_amp_run_env_cfg.py` 中：
-
-```python
-import torch
-
-# 修改 1: 奖励权重
-task_reward_weight = 0.5    # 从 0.0 → 0.5
-style_reward_weight = 0.5   # 从 1.0 → 0.5
-
-# 修改 2: 添加速度跟踪任务奖励
-def _compute_task_reward(self):
-    forward_vel = self._robot.data.root_lin_vel_b[:, 0]
-    target_vel = 4.0
-    return torch.exp(-4.0 * (forward_vel - target_vel) ** 2)
-```
-
-⚠️ **为什么必须加速度奖励**：纯 AMP（task_w=0）只学风格不瞄速度，策略可能收敛到参考数据的任意速度。
-
-#### Step 3：替换运动数据
-
-```python
-# 选项 A（推荐）: AMASS Retargeted for G1
-#   HuggingFace: ember-lab-berkeley/AMASS_Retargeted_for_G1
-#   已是 Isaac Lab AMP 兼容 .npz 格式
-
-# 选项 B: 从 BeyondMimic .npz 转换
-#   需写转换脚本匹配 _get_amp_observations() 的拼接顺序
-#   ⚠️ 拼接顺序必须与 AMP 环境代码完全一致
-```
-
-#### Step 4：注册新任务（本地编辑 `__init__.py`）
-
-```python
-import gymnasium as gym
-
-gym.register(
-    id="RobotLab-Isaac-G1-AMP-Run-Direct-v0",
-    entry_point="robot_lab.tasks.direct.amp....:G1AmpRunEnv",
-    disable_env_checker=True,
-    kwargs={
-        "env_cfg_entry_point": f"{__name__}.g1_amp_run_env_cfg:G1AmpRunEnvCfg",
-        "skrl_cfg_entry_point": f"{__name__}.agents.skrl_amp_cfg:...",
-    },
-)
-```
-
-在 `tasks/direct/__init__.py` 添加 import。
-
-#### Step 5：训练（RunPod）
-
-```bash
-# git push → RunPod: git pull && pip install -e source/robot_lab
-
-python scripts/reinforcement_learning/skrl/train.py \
+# 训练
+/isaac-sim/python.sh scripts/reinforcement_learning/skrl/train.py \
   --task=RobotLab-Isaac-G1-AMP-Run-Direct-v0 \
   --algorithm AMP --headless --num_envs 4096
 
 # 评估
-python scripts/reinforcement_learning/skrl/play.py \
+/isaac-sim/python.sh scripts/reinforcement_learning/skrl/play.py \
   --task=RobotLab-Isaac-G1-AMP-Run-Direct-v0 \
   --algorithm AMP --num_envs 32
 ```
-
-### 需要的修改
-
-| 修改 | 量 | 说明 |
-|------|---|------|
-| 复制+改 env_cfg | ~20 行 | 加速度奖励，改权重 |
-| 速度跟踪函数 | ~10 行 | `_compute_task_reward()` |
-| 运动数据 | 替换或转换 | AMASS .npz 直接可用 |
-| 任务注册 | ~10 行 | `__init__.py` |
-| 判别器/网络 | **0** | 默认够用 |
 
 ### AMP 训练监控
 
@@ -454,7 +416,7 @@ python scripts/reinforcement_learning/skrl/play.py \
 |------|---------|---------|
 | disc_accuracy | 55-85% | >95% → 降 gradient_penalty 到 1.0 |
 | forward_velocity | 趋近 4.0 | 停滞 → 增大 task_reward_weight |
-| episode_length | 趋近 10s | <2s → 终止条件过严 |
+| episode_length | 趋近 20s | <2s → 终止条件过严 |
 
 ---
 
