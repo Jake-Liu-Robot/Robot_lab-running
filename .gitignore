@@ -38,3 +38,11 @@ _build
 
 # LSP
 pyrightconfig.json
+
+# Datasets - non-G1 data
+lafan1_g1/h1/
+lafan1_g1/h1_2/
+lafan1_g1/robot_description/
+lafan1_g1/.cache/
+amass_g1_running/.cache/
+amass_g1_running/g1/

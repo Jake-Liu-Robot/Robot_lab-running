@@ -1,0 +1,33 @@
+# Running motion candidates (target: 4.0 m/s)
+# Scanned 494 files, 48 above 2.0 m/s
+
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/s008/Run1_poses_120_jpos.npz	2.73	4.32	1.8s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Female1Running_c3d/C3-Run_poses_120_jpos.npz	3.86	4.09	1.7s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Female1Running_c3d/C10-runbackwardsstoprunforward_poses_120_jpos.npz	2.13	3.82	5.1s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Female1Running_c3d/C9-runbackwardsturnrunforward_poses_120_jpos.npz	2.77	3.78	2.3s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Female1Running_c3d/C27-crouchtorun1_poses_120_jpos.npz	2.06	3.76	3.2s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Female1Running_c3d/C5-walktorun_poses_120_jpos.npz	1.26	3.69	5.4s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Female1Running_c3d/C22-runwithbox_poses_120_jpos.npz	3.31	3.64	2.0s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Male2Running_c3d/C19-runtojumptowalk_poses_120_jpos.npz	1.89	3.58	3.6s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Female1Running_c3d/C2-Runtostand_poses_120_jpos.npz	0.89	3.57	5.3s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Male2Running_c3d/C23-putdownboxtorun_poses_120_jpos.npz	2.18	3.47	3.2s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Female1Running_c3d/C21s2-runtopickupbox_poses_120_jpos.npz	2.66	3.36	2.6s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Male2Running_c3d/C20-runtopickupbox_poses_120_jpos.npz	2.69	3.30	2.9s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Male2Running_c3d/C26-runtocrouch_poses_120_jpos.npz	1.64	3.22	2.4s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Female1Running_c3d/C4-Runtowalk1_poses_120_jpos.npz	1.53	3.18	3.5s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Male2Running_c3d/C3-run_poses_120_jpos.npz	2.82	3.17	2.7s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Female1Running_c3d/C26-runtocrouch_poses_120_jpos.npz	1.65	3.15	3.0s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Female1Running_c3d/C15-runturnright45_poses_120_jpos.npz	2.84	3.12	2.1s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Female1Running_c3d/C19-runtohoptowalk_poses_120_jpos.npz	1.76	3.11	4.2s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Female1Running_c3d/C16-runturnright135_poses_120_jpos.npz	2.20	3.07	2.4s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Male2Running_c3d/C12-runturnleft45_poses_120_jpos.npz	2.68	3.03	2.2s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Male2Running_c3d/C5-walktorun_poses_120_jpos.npz	2.00	3.01	3.6s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Female1Running_c3d/C24-sidestepleft_poses_120_jpos.npz	1.51	2.94	4.0s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Male2Running_c3d/C1-standtorun_poses_120_jpos.npz	1.02	2.88	4.1s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Female1Running_c3d/C13-runturnleft135_poses_120_jpos.npz	1.86	2.87	2.9s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Female1Running_c3d/C20-runtojumptowalk_poses_120_jpos.npz	1.65	2.85	4.0s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Male2Running_c3d/C17-runchangedirection_poses_120_jpos.npz	2.32	2.80	3.1s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Male2Running_c3d/C16-runturnright135_poses_120_jpos.npz	1.93	2.79	3.2s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Male2MartialArtsStances_c3d/D3-runtoready_poses_120_jpos.npz	1.23	2.79	2.7s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Male2Running_c3d/C13-runturnleft135_poses_120_jpos.npz	1.90	2.78	3.1s
+/home/jake/whole_body_tracking/data/amass_g1_running/g1/ACCAD/Female1Running_c3d/C25-sidestepright_poses_120_jpos.npz	1.40	2.76	4.3s
