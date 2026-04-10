@@ -53,49 +53,71 @@
 
 ## RunPod 环境搭建
 
+⚠️ **pip 安装 Isaac Sim 有已知问题**（`exts/` 目录缺失导致 `SimulationApp` 为 None）。**必须使用 NGC Docker 镜像。**
+
+### 方式（已验证可用）：NGC Docker 镜像 + Isaac Lab 源码
+
 ```bash
-# === 方式 A：NGC Docker（推荐） ===
-# RunPod 选择镜像: nvcr.io/nvidia/isaac-lab:2.3.2
-# 容器已有 Isaac Lab，只装 robot_lab：
+# === RunPod Pod 配置 ===
+# 镜像: nvcr.io/nvidia/isaac-lab:2.3.2（自定义模板）
+# 环境变量: ACCEPT_EULA=Y（必须，否则容器无法启动）
+# GPU: RTX 4090, Container Disk: 20GB
+# Network Volume: 挂载到 /workspace
 
-git clone https://github.com/fan-ziqi/robot_lab.git
-cd robot_lab && git checkout v2.3.2
-pip install -e source/robot_lab
+# === 进入 Pod 后 ===
+source /isaac-sim/setup_python_env.sh
 
-# === 方式 B：pip 从零安装 ===
-conda create -n isaaclab python=3.11 -y && conda activate isaaclab
-pip install isaacsim==5.1.0 isaacsim-extscache-physics==5.1.0 \
-    isaacsim-extscache-kit==5.1.0 isaacsim-extscache-kit-sdk==5.1.0 \
-    --extra-index-url https://pypi.nvidia.com
-git clone https://github.com/isaac-sim/IsaacLab.git
-cd IsaacLab && git checkout v2.3.0 && ./isaaclab.sh --install && cd ..
-git clone https://github.com/fan-ziqi/robot_lab.git
-cd robot_lab && git checkout v2.3.2 && pip install -e source/robot_lab
+# 安装 Isaac Lab（NGC 镜像有 Isaac Sim 但没有 Isaac Lab）
+cd /workspace/IsaacLab
+/isaac-sim/python.sh -m pip install -e source/isaaclab
+/isaac-sim/python.sh -m pip install -e source/isaaclab_assets
+/isaac-sim/python.sh -m pip install -e source/isaaclab_tasks
 
-# === 验证（两种方式都执行） ===
-python scripts/tools/list_envs.py | grep -i "beyondmimic\|amp"
+# 安装 robot_lab
+cd /workspace/robot_lab
+git pull
+/isaac-sim/python.sh -m pip install -e source/robot_lab
+
+# === 验证 ===
+/isaac-sim/python.sh scripts/tools/list_envs.py | grep -i "beyondmimic\|amp"
 # 应看到:
 #   RobotLab-Isaac-BeyondMimic-Flat-Unitree-G1-v0
 #   RobotLab-Isaac-G1-AMP-Dance-Direct-v0
+
+# === 关键命令前缀 ===
+# 所有 python 命令必须用 /isaac-sim/python.sh 代替 python
+# 例如: /isaac-sim/python.sh scripts/reinforcement_learning/rsl_rl/train.py ...
 ```
 
-### RunPod 实际配置（2026-04-09 创建）
+### RunPod 实际配置（2026-04-09 验证）
 
-- **模板**: Linux Desktop - AI-Dock（ghcr.io/ai-dock/linux-desktop:latest）— 带桌面环境用于可视化
+- **模板**: `isaac-lab-2.3.2`（自定义，镜像 `nvcr.io/nvidia/isaac-lab:2.3.2`）
+- **环境变量**: `ACCEPT_EULA=Y`（必须）
 - **GPU**: RTX 4090 24GB（~$0.39/hr）⚠️ 不要用 RTX 5090（Blackwell 有已知 bug）
-- **Container Disk**: 50GB
+- **Container Disk**: 20GB
 - **Network Volume**: `Isaac sim`，100GB，挂载在 `/workspace`
-- **CUDA**: 12.8（nvidia-smi 确认）
-- **Conda**: miniconda3 安装在 `/workspace/miniconda3`（持久化）
-- **Conda 环境**: `isaaclab`，Python 3.11.15 ⚠️ 必须用 3.11，**不要用 3.13**
+- **Python**: `/isaac-sim/kit/python/bin/python3.11`（镜像自带，不用 conda）
 - **Spot 实例**可用（50-70% 折扣），每 50-100 迭代保存 checkpoint + `--resume`
+
+⚠️ **已踩的坑**：
+- pip 安装 isaacsim（5.0.0/5.1.0）`exts/` 目录缺失 → SimulationApp 为 None → 不可用
+- Desktop 模板（AI-Dock）无法运行 Isaac Sim，必须用 NGC 镜像
+- Conda 环境 Python 版本容易错（3.13 vs 3.11）
+- NGC 镜像没有预装 Isaac Lab，需要从 /workspace/IsaacLab 源码安装
 
 ### RunPod 环境恢复（Pod 重启后）
 
 ```bash
-export PATH="/workspace/miniconda3/bin:$PATH"
-conda activate isaaclab
+source /isaac-sim/setup_python_env.sh
 cd /workspace/robot_lab
+
+# 如果 pip 包丢失（Container Disk 被重置）:
+cd /workspace/IsaacLab
+/isaac-sim/python.sh -m pip install -e source/isaaclab
+/isaac-sim/python.sh -m pip install -e source/isaaclab_assets
+/isaac-sim/python.sh -m pip install -e source/isaaclab_tasks
+cd /workspace/robot_lab
+/isaac-sim/python.sh -m pip install -e source/robot_lab
 ```
 
 ---
@@ -270,26 +292,43 @@ python scripts/tools/beyondmimic/csv_to_npz.py \
 python scripts/tools/beyondmimic/replay_npz.py -f sprint.npz
 ```
 
+### 数据转换（RunPod）
+
+```bash
+# 舞蹈数据（跑通验证用）
+/isaac-sim/python.sh scripts/tools/beyondmimic/csv_to_npz.py \
+  -f source/robot_lab/robot_lab/tasks/manager_based/beyondmimic/config/g1/motion/G1_Take_102.bvh_60hz.csv \
+  --input_fps 60 --headless
+
+# 跑步数据（正式实验用）— 先将 run2_subject1.csv 复制到 motion 目录
+cp lafan1_g1/g1/run2_subject1.csv \
+  source/robot_lab/robot_lab/tasks/manager_based/beyondmimic/config/g1/motion/
+/isaac-sim/python.sh scripts/tools/beyondmimic/csv_to_npz.py \
+  -f source/robot_lab/robot_lab/tasks/manager_based/beyondmimic/config/g1/motion/run2_subject1.csv \
+  --input_fps 60 --frame_range 1968 2533 --headless
+```
+
 ### 训练（RunPod）
 
 ⚠️ **运动数据路径在 env_cfg 类中指定，不通过 CLI 参数**（`--motion` 不存在）。
+⚠️ **所有 python 命令必须用 `/isaac-sim/python.sh` 代替 `python`**。
 
 ```bash
 # 先在本地修改 flat_env_cfg.py 中的 motion 配置指向跑步 .npz → git push
-# RunPod: git pull && pip install -e source/robot_lab
+# RunPod: git pull && /isaac-sim/python.sh -m pip install -e source/robot_lab
 
-python scripts/reinforcement_learning/rsl_rl/train.py \
+/isaac-sim/python.sh scripts/reinforcement_learning/rsl_rl/train.py \
   --task=RobotLab-Isaac-BeyondMimic-Flat-Unitree-G1-v0 \
   --headless --num_envs 4096
 
 # 恢复训练
-python scripts/reinforcement_learning/rsl_rl/train.py \
+/isaac-sim/python.sh scripts/reinforcement_learning/rsl_rl/train.py \
   --task=RobotLab-Isaac-BeyondMimic-Flat-Unitree-G1-v0 \
   --headless --resume <run_name>
 
-# 评估
-python scripts/reinforcement_learning/rsl_rl/play.py \
-  --task=RobotLab-Isaac-BeyondMimic-Flat-Unitree-G1-v0 --num_envs 2
+# 评估（带视频录制）
+/isaac-sim/python.sh scripts/reinforcement_learning/rsl_rl/play.py \
+  --task=RobotLab-Isaac-BeyondMimic-Flat-Unitree-G1-v0 --num_envs 2 --video
 ```
 
 ### 需要的修改
