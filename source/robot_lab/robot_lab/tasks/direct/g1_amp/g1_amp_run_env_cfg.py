@@ -68,7 +68,7 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     target_base_height: float = 0.75  # G1 pelvis height during running (~m)
     rew_lateral_vel: float = -0.5   # penalize sideways drift
     rew_yaw_rate: float = -0.5      # penalize spinning, increased to prevent direction drift
-    rew_action_rate: float = -0.05  # penalize jerky actions
+    rew_action_rate: float = -0.1   # penalize jerky actions, increased for smoother standing
 
     # --- disable env-side imitation (discriminator handles style) ---
     rew_imitation_pos = 0.0
