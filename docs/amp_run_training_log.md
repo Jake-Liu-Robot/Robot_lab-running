@@ -249,26 +249,162 @@ logs/skrl/g1_amp_run/2026-04-11_15-14-03_amp_torch/checkpoints/
 
 **LR 修复成功。** 策略恢复更新能力。
 
-### 6.3 监控中 — 待填充
+### 6.3 Episode Length 趋势（完整）
 
-后续检查点：
-- 10K 步：episode_len 是否突破 118 平台期
-- 50K 步：整体趋势评估
-- 100K 步：forward_vel 是否跟踪 cmd_vel
-
-### 6.4 监控命令
-
-```bash
-# 查看所有指标最新值
-/isaac-sim/python.sh -c "from tensorboard.backend.event_processing.event_accumulator import EventAccumulator; import os; d='/workspace/robot_lab/logs/skrl/g1_amp_run/'; latest=sorted(os.listdir(d))[-1]; ea=EventAccumulator(d+latest); ea.Reload(); [print(t.split('/')[-1]+': '+str(round(ea.Scalars(t)[-1].value,6))) for t in ea.Tags()['scalars']]"
-
-# 查看 episode_len 趋势
-/isaac-sim/python.sh -c "from tensorboard.backend.event_processing.event_accumulator import EventAccumulator; import os; d='/workspace/robot_lab/logs/skrl/g1_amp_run/'; latest=sorted(os.listdir(d))[-1]; ea=EventAccumulator(d+latest); ea.Reload(); [print(e.step, round(e.value,1)) for e in ea.Scalars('Episode / Total timesteps (mean)')]"
 ```
+5K   → 118.5    恢复起点
+10K  → 132.2    突破平台期
+15K  → 154.3
+20K  → 253.4    加速增长
+25K  → 340.8
+30K  → 396.5
+35K  → 439.4
+40K  → 480.0
+45K  → 516.6
+50K  → 565.4
+55K  → 588.2
+60K  → 610.1
+65K  → 648.3
+70K  → 695.1
+75K  → 716.0
+80K  → 763.4
+85K  → 820.0
+90K  → 871.5
+95K  → 910.3
+100K → 906.3
+105K → 956.7
+110K → 975.8
+115K → 1041.1
+120K → 1061.9
+125K → 1069.4
+130K → 1100.8
+135K → 1155.2
+140K → 1180.2    接近收敛
+145K → 1177.1
+150K → 1174.6
+155K → 1180.4
+160K → 1180.2
+165K → 1181.4
+170K → 1177.2
+175K → 1175.3
+180K → 1177.0
+185K → 1172.1    收敛在 ~1177 步 (19.6s)
+```
+
+### 6.4 185K 步最终指标
+
+| 指标 | 值 |
+|------|-----|
+| Episode length (mean) | 1172 步 (19.5s) |
+| Reward (mean) | 0.55 |
+| Total reward (mean) | 644 |
+| Learning rate | 1.02e-4 |
+| Discriminator loss | 1.75 |
 
 ---
 
-## 7. 关键经验总结
+## 7. Eval 评估（180K checkpoint）
+
+### 7.1 Ramp 测试：cmd=4.0 (15s) → cmd=0.0 (5s)
+
+**速度跟踪结果（CSV 每秒数据）**：
+
+```
+t=1s:   cmd=4.0  fwd=3.40 m/s   加速中
+t=2s:   cmd=4.0  fwd=3.93 m/s   接近目标
+t=3s:   cmd=4.0  fwd=3.97 m/s   稳定巡航
+t=5s:   cmd=4.0  fwd=3.95 m/s
+t=8s:   cmd=4.0  fwd=3.98 m/s
+t=10s:  cmd=4.0  fwd=3.95 m/s
+t=13s:  cmd=4.0  fwd=3.94 m/s
+t=15s:  cmd=4.0  fwd=3.94 m/s   最后一秒巡航
+t=16s:  cmd=0.0  fwd=0.08 m/s   快速减速！
+t=18s:  cmd=0.0  fwd=0.02 m/s   停稳
+t=20s:  cmd=0.0  fwd=0.01 m/s   完全静止
+```
+
+**结论**：
+- ✅ 加速 0→4 m/s：~1.5 秒
+- ✅ 巡航 3.9-4.0 m/s：稳定持续 13 秒
+- ✅ 减速 4→0 m/s：~1 秒
+- ✅ 全程无摔倒，Total reward = 1208
+
+### 7.2 视频观察到的问题
+
+| 问题 | 严重性 | 原因分析 |
+|------|--------|---------|
+| 跑步方向偏移 | 中 | `rew_yaw_rate=-0.1` 太弱 |
+| 站立姿态倾斜+摇晃 | 中 | `rew_upright=0.2` 太弱，`rew_action_rate=-0.05` 太弱 |
+| 前脚掌着地 | 无（正常） | 4 m/s 冲刺的自然步态 |
+| 第一个 env 偶尔摔倒 | 低 | 初始状态随机性 |
+
+### 7.3 Eval 脚本（eval_amp_run.py）
+
+独立评估脚本，不修改训练配置：
+- `--cmd_vel 4.0`：固定速度测试
+- `--cmd_vel ramp`：完整周期（4m/s 15s → 0m/s 5s）
+- `--cmd_vel random`：训练分布
+- 自动录制 20s 视频 + CSV 每步记录
+- 摄像头跟踪 robot 0
+
+---
+
+## 8. 参数调整 #3 → Run 3（2026-04-11）
+
+### 8.1 修改内容
+
+基于 180K eval 视频观察的问题：
+
+| 参数 | Run 2b | Run 3 | 目的 |
+|------|--------|-------|------|
+| `rew_upright` | 0.2 | **1.0** | 修站立倾斜（30°倾斜扣 0.13/步 vs 跑步前倾15°仅扣 0.03/步） |
+| `rew_yaw_rate` | -0.1 | **-0.5** | 修跑步方向偏移 |
+| `rew_action_rate` | -0.05 | **-0.1** | 修站立摇晃（站立抖动 Σ(Δa²)≈2.0 惩罚 -0.2/步，跑步仅 -0.04/步） |
+| `command_prob_high` | 0.2 | **0.4** | 已会跑，增加高速训练（低速从50%降到30%） |
+
+### 8.2 设计权衡分析
+
+**upright=1.0 会不会影响跑步前倾？**
+- 跑步前倾 15°：奖励 0.97（vs 满分 1.0，差 0.03/步）
+- 速度跟踪奖励：1.5/步 → 策略不会为 0.03 放弃跑步 ✓
+
+**action_rate=-0.1 会不会影响跑步？**
+- 跑步周期性步态：连续动作相似，Σ(Δa²)≈0.3-0.5 → 惩罚仅 -0.04/步
+- 站立抖动：Σ(Δa²)≈2.0-3.0 → 惩罚 -0.2/步 ← 有效惩罚 ✓
+
+**joint_vel 没有改**：增大 5 倍会严重影响跑步（跑步时关节速度大 → 惩罚可达 -5.0/步）
+
+### 8.3 训练 Run 3 — 进行中
+
+从 180K checkpoint 续训：
+```bash
+/isaac-sim/python.sh scripts/reinforcement_learning/skrl/train.py \
+  --task=RobotLab-Isaac-G1-AMP-Run-Direct-v0 --algorithm AMP \
+  --headless --num_envs 4096 \
+  --checkpoint logs/skrl/g1_amp_run/2026-04-11_16-21-16_amp_torch/checkpoints/agent_180000.pt
+```
+
+### 8.4 Run 3 早期指标（20K 步）
+
+```
+5K   → 794.7   （奖励变化导致初始下降，正常）
+10K  → 1115.9  （快速恢复）
+15K  → 1153.6  （接近之前水平）
+20K  → 1044.0  （波动，待观察）
+```
+
+| 指标 | 值 | 判断 |
+|------|-----|------|
+| Episode length | 1044 | 波动中，需要更多数据 |
+| Reward (mean) | 0.68 | ✅ 高于 Run 2b (0.55)，upright 奖励贡献 |
+| Learning rate | 1.3e-4 | ✅ 健康 |
+| Discriminator loss | 1.67 | ✅ 健康 |
+
+**待 50K 步后评估趋势。**
+
+---
+
+## 9. 关键经验总结
 
 ### 7.1 AMP 训练调参优先级
 
@@ -365,16 +501,20 @@ apt-get update && apt-get install -y tmux
 
 ---
 
-## 9. 后续计划
+## 11. 后续计划
 
-### 手动课程策略
+### Run 3 完成后
 
-```
-Run 2b（当前）: default reset, prob_high=0.2, kl_threshold=0.02
-  ↓ 目标: episode_len > 200+, forward_vel 开始跟踪
-Run 3: prob_high=0.5, 可选 termination=0.3
-  ↓ --checkpoint 续训，强化高速跑步
-Run 4: 微调（如有需要），可选 reset=random
+1. Eval 评估：`--cmd_vel ramp` 对比站立姿态是否改善
+2. 如果站立仍然摇晃：考虑增大 `rew_action_rate` → -0.15
+3. 如果跑步方向仍偏移：考虑添加全局方向奖励
+4. 考虑继续训练到 500K 总步数
+
+### Eval 测试命令
+
+```bash
+/isaac-sim/python.sh scripts/reinforcement_learning/skrl/eval_amp_run.py \
+  --checkpoint <path> --cmd_vel ramp --num_envs 2
 ```
 
 ### 恢复训练命令
@@ -386,13 +526,51 @@ Run 4: 微调（如有需要），可选 reset=random
   --checkpoint logs/skrl/g1_amp_run/<run_dir>/checkpoints/agent_XXXXX.pt
 ```
 
+### 监控命令
+
+```bash
+# 所有指标
+/isaac-sim/python.sh -c "from tensorboard.backend.event_processing.event_accumulator import EventAccumulator; import os; d='/workspace/robot_lab/logs/skrl/g1_amp_run/'; latest=sorted(os.listdir(d))[-1]; ea=EventAccumulator(d+latest); ea.Reload(); [print(t.split('/')[-1]+': '+str(round(ea.Scalars(t)[-1].value,6))) for t in ea.Tags()['scalars']]"
+
+# Episode length 趋势
+/isaac-sim/python.sh -c "from tensorboard.backend.event_processing.event_accumulator import EventAccumulator; import os; d='/workspace/robot_lab/logs/skrl/g1_amp_run/'; latest=sorted(os.listdir(d))[-1]; ea=EventAccumulator(d+latest); ea.Reload(); [print(e.step, round(e.value,1)) for e in ea.Scalars('Episode / Total timesteps (mean)')]"
+```
+
 ---
 
-## 附录：Git Commit 记录
+## 附录 A：Git Commit 记录
 
 | Commit | 内容 |
 |--------|------|
 | `44ff6ae` | 修复 csv2npz_run.py: Pinocchio 3.x 兼容 + REPO_ROOT 路径 |
-| `0c5abeb` | 修复训练: default reset, termination=0.25, prob_high=0.2 |
-| `15ad780` | 添加训练日志文档 |
+| `0c5abeb` | Run 2: default reset, termination=0.25, prob_high=0.2 |
 | `0fb6eec` | 修复 KL threshold: 0.008 → 0.02 |
+| `e16acc6` | 修复 play.py: pretrained_checkpoint import |
+| `a460e97` | 添加 eval_amp_run.py 评估脚本 |
+| `951e389` | Ramp 模式：4m/s 15s → 0m/s 5s |
+| `f40aad6` | 地面扩大到 500m × 500m |
+| `c698b4f` | Run 3: upright=1.0, yaw_rate=-0.5, prob_high=0.4 |
+| `531c48b` | Run 3: action_rate=-0.1 |
+| `490f056` | Run 3: upright 确认 1.0 |
+
+## 附录 B：训练历程总览
+
+```
+Run 1 (50K步) — 失败
+  reset=random, termination=0.4, prob_high=0.5
+  episode_len: 17→15（下降，即时摔倒）
+  
+Run 2 (55K步) — 部分成功
+  reset=default, termination=0.25, prob_high=0.2
+  episode_len: 17→118（大幅改善，但 lr→0 冻结）
+
+Run 2b (185K步) — 成功
+  kl_threshold: 0.008→0.02（修复 lr）
+  episode_len: 118→1177（收敛，接近满分）
+  Eval: 4.0 m/s 稳定巡航 ✅，站立姿态差 ⚠️
+
+Run 3 (进行中) — 改善姿态
+  upright=1.0, yaw_rate=-0.5, action_rate=-0.1, prob_high=0.4
+  从 180K checkpoint 续训
+  早期: 794→1044（适应新奖励中）
+```
