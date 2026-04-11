@@ -113,11 +113,21 @@ def main(env_cfg: DirectRLEnvCfg, experiment_cfg: dict):
         ckpt_name = os.path.splitext(os.path.basename(args_cli.checkpoint))[0]
         output_path = os.path.join(output_dir, f"eval_{ckpt_name}_{cmd_vel_mode}.mp4")
 
-    # --- enlarge ground plane for long-distance running ---
-    env_cfg.scene.env_spacing = 100.0  # default 4.0, need ~60m for 15s at 4m/s
+    # --- keep envs close together, we only care about robot 0 ---
+    env_cfg.scene.env_spacing = 5.0
 
     # --- create env ---
     env = gym.make(TASK, cfg=env_cfg, render_mode="rgb_array")
+
+    # --- enlarge ground plane for long-distance running (4m/s × 20s = 80m) ---
+    import omni.usd
+    stage = omni.usd.get_context().get_stage()
+    ground_prim = stage.GetPrimAtPath("/World/ground")
+    if ground_prim.IsValid():
+        # Scale ground plane to 500m x 500m
+        from pxr import Gf
+        ground_prim.GetAttribute("xformOp:scale").Set(Gf.Vec3d(5.0, 5.0, 1.0))
+        print("[EVAL] Ground plane scaled to ~500m x 500m")
 
     video_kwargs = {
         "video_folder": output_dir,
