@@ -144,7 +144,16 @@ def main(env_cfg: DirectRLEnvCfg, experiment_cfg: dict):
     total_steps = args_cli.video_length
     reward_sum = torch.zeros(args_cli.num_envs, device=raw_env.device)
 
+    # --- CSV log file ---
+    ckpt_name = os.path.splitext(os.path.basename(args_cli.checkpoint))[0]
+    csv_path = os.path.join(output_dir, f"eval_{ckpt_name}_{cmd_vel_mode}.csv")
+    csv_file = open(csv_path, "w")
+    csv_file.write("step,time_s,cmd_vel,fwd_vel,lateral_vel,pelvis_height,reward_step\n")
+
+    from isaaclab.utils.math import quat_rotate_inverse
+
     print(f"[EVAL] Running {total_steps} steps ({total_steps / 60:.1f}s at 60Hz)...")
+    print(f"[EVAL] Logging to: {csv_path}")
 
     for step in range(total_steps):
         # --- override velocity command for fixed/ramp modes ---
@@ -173,21 +182,33 @@ def main(env_cfg: DirectRLEnvCfg, experiment_cfg: dict):
             cam_target = [robot_pos[0], robot_pos[1], robot_pos[2] + 0.5]
             raw_env.sim.set_camera_view(cam_offset, cam_target)
 
-        # --- print progress ---
-        if (step + 1) % 300 == 0 or step == total_steps - 1:
-            fwd_vel = 0.0
-            if hasattr(raw_env, 'robot'):
-                from isaaclab.utils.math import quat_rotate_inverse
-                root_quat = raw_env.robot.data.body_quat_w[:, raw_env.ref_body_index]
-                root_vel = raw_env.robot.data.body_lin_vel_w[:, raw_env.ref_body_index]
-                vel_body = quat_rotate_inverse(root_quat, root_vel)
-                fwd_vel = vel_body[:, 0].mean().item()
+        # --- log every step to CSV ---
+        fwd_vel = 0.0
+        lat_vel = 0.0
+        pelvis_h = 0.0
+        if hasattr(raw_env, 'robot'):
+            root_quat = raw_env.robot.data.body_quat_w[0, raw_env.ref_body_index]
+            root_vel_w = raw_env.robot.data.body_lin_vel_w[0, raw_env.ref_body_index]
+            vel_body = quat_rotate_inverse(root_quat.unsqueeze(0), root_vel_w.unsqueeze(0)).squeeze(0)
+            fwd_vel = vel_body[0].item()
+            lat_vel = vel_body[1].item()
+            pelvis_h = raw_env.robot.data.body_pos_w[0, raw_env.ref_body_index, 2].item()
 
-            cmd = raw_env.velocity_commands.mean().item() if hasattr(raw_env, 'velocity_commands') else 0
-            print(f"  step {step+1}/{total_steps} | cmd={cmd:.1f} m/s | fwd_vel={fwd_vel:.2f} m/s | reward={reward_sum.mean().item():.1f}")
+        cmd = raw_env.velocity_commands[0].item() if hasattr(raw_env, 'velocity_commands') else 0
+        step_reward = rewards[0].item() if rewards.dim() > 0 else rewards.item()
+        t_sec = step / 60.0
+
+        csv_file.write(f"{step},{t_sec:.3f},{cmd:.3f},{fwd_vel:.3f},{lat_vel:.3f},{pelvis_h:.3f},{step_reward:.4f}\n")
+
+        # --- print to terminal every 60 steps (1s) ---
+        if (step + 1) % 60 == 0 or step == total_steps - 1:
+            print(f"  t={t_sec:.1f}s | cmd={cmd:.1f} m/s | fwd={fwd_vel:.2f} m/s | lat={lat_vel:.2f} | h={pelvis_h:.2f}m | rew={reward_sum[0].item():.1f}")
+
+    csv_file.close()
 
     # --- summary ---
     print(f"\n[RESULT] Total reward: {reward_sum.mean().item():.1f}")
+    print(f"[RESULT] CSV saved to: {csv_path}")
     print(f"[RESULT] Video saved to: {output_dir}/")
 
     # --- find and rename video ---
