@@ -71,7 +71,7 @@ fps:                     30
 | rollouts | 16 |
 | learning_epochs | 6 |
 | mini_batches | 2 |
-| learning_rate | 5e-5 (KLAdaptiveLR) |
+| learning_rate | 5e-5 (KLAdaptiveLR, kl_threshold=0.008) |
 | task_reward_weight | 0.7 |
 | style_reward_weight | 0.3 |
 | **reset_strategy** | **"random"** |
@@ -131,7 +131,7 @@ step=50000, episode_len=15.0
 
 **总结**：相当于让一个还不会站的婴儿从跑步姿态开始练冲刺，必然失败。
 
-### 2.5 Checkpoints（保留备查）
+### 2.5 Checkpoints
 
 ```
 logs/skrl/g1_amp_run/2026-04-11_13-49-28_amp_torch/checkpoints/
@@ -140,7 +140,7 @@ logs/skrl/g1_amp_run/2026-04-11_13-49-28_amp_torch/checkpoints/
 
 ---
 
-## 3. 参数调整（2026-04-11，commit 0c5abeb）
+## 3. 参数调整 #1（2026-04-11，commit 0c5abeb）
 
 | 参数 | Run 1（失败） | Run 2（修改后） | 修改原因 |
 |------|-------------|----------------|---------|
@@ -149,20 +149,11 @@ logs/skrl/g1_amp_run/2026-04-11_13-49-28_amp_torch/checkpoints/
 | `command_prob_high` | 0.5 | 0.2 | 减少冲刺比例，先学站立和慢走 |
 | `command_prob_low` | 0.2 | 0.5 | 增加低速比例，让机器人先学基础 |
 
-**未修改的参数**（保持不变）：
-- task_reward_weight = 0.7, style_reward_weight = 0.3
-- 速度范围 [0, 4] m/s（未缩小，仍包含所有速度段）
-- 网络结构 [1024, 512]
-- 其他所有超参数
-
-**设计思路**：
-- 这是手动课程学习的第一阶段
-- 如果 Run 2 episode_len 增长到 200+ 步，forward_vel 开始跟踪命令 → 调回 prob_high=0.5 继续训练
-- 速度范围不变，策略仍然会见到 3-4 m/s 命令（20% 概率），只是频率降低
+**未修改**：task/style 权重、速度范围 [0,4]、网络结构、其他超参数
 
 ---
 
-## 4. 训练 Run 2 — 进行中（2026-04-11）
+## 4. 训练 Run 2（2026-04-11）
 
 ### 4.1 配置
 
@@ -173,57 +164,145 @@ logs/skrl/g1_amp_run/2026-04-11_13-49-28_amp_torch/checkpoints/
 | command_prob_high | 0.2 |
 | command_prob_mid | 0.3 |
 | command_prob_low | 0.5 |
+| kl_threshold | 0.008（未改，导致后续问题） |
 | 其余 | 同 Run 1 |
 
-**日志目录**：`logs/skrl/g1_amp_run/2026-04-11_15-14-XX_amp_torch/`（待确认）
+**日志目录**：`logs/skrl/g1_amp_run/2026-04-11_15-14-03_amp_torch/`
 
-### 4.2 关键检查点
+### 4.2 Episode Length 趋势 — 大幅改善
 
-| 步数 | 检查内容 | 预期 |
-|------|---------|------|
-| 5K-10K | episode_len 趋势 | 应 > 15 步（比 Run 1 好） |
-| 50K | episode_len + forward_vel | episode_len 应持续增长 |
-| 100K | forward_vel vs cmd_vel | forward_vel 应开始跟踪 |
-| 200K+ | 整体收敛趋势 | 决定是否需要 Run 3 |
-
-### 4.3 监控命令
-
-```bash
-# 查看最新 run 的所有指标
-/isaac-sim/python.sh -c "
-from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
-import os
-dirs = sorted(os.listdir('/workspace/robot_lab/logs/skrl/g1_amp_run/'))
-latest = dirs[-1]
-ea = EventAccumulator(f'/workspace/robot_lab/logs/skrl/g1_amp_run/{latest}')
-ea.Reload()
-tags = ea.Tags()['scalars']
-for t in tags:
-    e = ea.Scalars(t)[-1]
-    print(f'{t}: step={e.step}, val={e.value:.4f}')
-"
-
-# 查看 episode_len 趋势
-/isaac-sim/python.sh -c "
-from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
-import os
-dirs = sorted(os.listdir('/workspace/robot_lab/logs/skrl/g1_amp_run/'))
-latest = dirs[-1]
-ea = EventAccumulator(f'/workspace/robot_lab/logs/skrl/g1_amp_run/{latest}')
-ea.Reload()
-[print(f'step={e.step}, episode_len={e.value:.1f}') for e in ea.Scalars('Episode / Total timesteps (mean)')]
-"
+```
+step=5000,  episode_len=17.9   从站立开始，比 Run 1 同期好
+step=10000, episode_len=17.8
+step=15000, episode_len=19.5   开始上升
+step=20000, episode_len=46.6   突破！学会站稳
+step=25000, episode_len=91.0   快速增长
+step=30000, episode_len=97.1
+step=35000, episode_len=103.7
+step=40000, episode_len=108.8
+step=45000, episode_len=113.9  增长放缓
+step=50000, episode_len=118.2  平台期
 ```
 
-### 4.4 结果
+### 4.3 50K 步指标
 
-> **（训练进行中，待填充）**
+| 指标 | Run 2 (50K) | Run 1 (50K) | 改善 |
+|------|------------|------------|------|
+| Episode length (mean) | **118.2 步 (2.4s)** | 15.0 步 (0.3s) | **7.9x** |
+| Episode length (max) | **1199 步 (24s)** | — | 有 env 活过 episode 上限 |
+| Reward (mean) | **+0.476** | -2.62 | 转正 |
+| Total reward (mean) | **+56.3** | -39.5 | 大幅改善 |
+| Discriminator loss | 1.12 | 2.27 | 判别器收敛 |
+| Learning rate | **0.0** | — | ⚠️ 被 KLAdaptiveLR 压到 0 |
+
+### 4.4 问题：Learning Rate 降到 0
+
+**现象**：KLAdaptiveLR 将学习率从 5e-5 持续减半至 0.0，策略冻结。
+
+**原因**：`kl_threshold=0.008` 过小。AMP 训练中策略变化大（判别器更新、随机命令、从摔倒到站立的行为剧变），KL 散度频繁超过 2×0.008=0.016，触发 lr 减半。减半速度远快于恢复（翻倍）速度 → lr 单调下降至 0。
+
+**影响**：episode_len 增长从 ~6步/5K 放缓到 ~4步/5K，策略停止改进。
+
+### 4.5 Checkpoints
+
+```
+logs/skrl/g1_amp_run/2026-04-11_15-14-03_amp_torch/checkpoints/
+  agent_10000.pt ~ agent_50000.pt, best_agent.pt
+```
+
+**在 55K 步手动停止。**
 
 ---
 
-## 5. 环境搭建备忘
+## 5. 参数调整 #2（2026-04-11，commit 0fb6eec）
 
-### 5.1 RunPod 配置
+| 参数 | Run 2 | Run 2b（续训） | 修改原因 |
+|------|-------|---------------|---------|
+| `kl_threshold` | 0.008 | **0.02** | 允许更大策略变化，防止 lr 被压到 0 |
+
+---
+
+## 6. 训练 Run 2b — 续训进行中（2026-04-11）
+
+### 6.1 配置
+
+从 Run 2 的 `agent_50000.pt` checkpoint 恢复训练。
+唯一修改：`kl_threshold: 0.008 → 0.02`
+
+```bash
+/isaac-sim/python.sh scripts/reinforcement_learning/skrl/train.py \
+  --task=RobotLab-Isaac-G1-AMP-Run-Direct-v0 --algorithm AMP \
+  --headless --num_envs 4096 \
+  --checkpoint logs/skrl/g1_amp_run/2026-04-11_15-14-03_amp_torch/checkpoints/agent_50000.pt
+```
+
+**日志目录**：`logs/skrl/g1_amp_run/` 下最新的 `2026-04-11_*` 目录
+
+### 6.2 初始指标（恢复后第一个记录点）
+
+| 指标 | 值 | 说明 |
+|------|-----|------|
+| Episode length (mean) | 118.5 | 和 Run 2 结束时持平 |
+| Learning rate | **4.2e-5** | ✅ 从 0.0 恢复！（初始值 5e-5） |
+| Reward (mean) | 0.477 | 持平 |
+| Discriminator loss | 1.19 | 正常 |
+
+**LR 修复成功。** 策略恢复更新能力。
+
+### 6.3 监控中 — 待填充
+
+后续检查点：
+- 10K 步：episode_len 是否突破 118 平台期
+- 50K 步：整体趋势评估
+- 100K 步：forward_vel 是否跟踪 cmd_vel
+
+### 6.4 监控命令
+
+```bash
+# 查看所有指标最新值
+/isaac-sim/python.sh -c "from tensorboard.backend.event_processing.event_accumulator import EventAccumulator; import os; d='/workspace/robot_lab/logs/skrl/g1_amp_run/'; latest=sorted(os.listdir(d))[-1]; ea=EventAccumulator(d+latest); ea.Reload(); [print(t.split('/')[-1]+': '+str(round(ea.Scalars(t)[-1].value,6))) for t in ea.Tags()['scalars']]"
+
+# 查看 episode_len 趋势
+/isaac-sim/python.sh -c "from tensorboard.backend.event_processing.event_accumulator import EventAccumulator; import os; d='/workspace/robot_lab/logs/skrl/g1_amp_run/'; latest=sorted(os.listdir(d))[-1]; ea=EventAccumulator(d+latest); ea.Reload(); [print(e.step, round(e.value,1)) for e in ea.Scalars('Episode / Total timesteps (mean)')]"
+```
+
+---
+
+## 7. 关键经验总结
+
+### 7.1 AMP 训练调参优先级
+
+1. **reset_strategy**：最关键。`"random"` 对复杂运动（跑步）几乎必失败，应从 `"default"` 开始
+2. **termination_height**：过高 → episode 太短 → 学不到有效信号
+3. **command 分布**：初期偏向低速，让机器人先学站稳
+4. **kl_threshold**：AMP 训练策略变化大，默认 0.008 太小，建议 0.02+
+
+### 7.2 判断训练是否正常
+
+| 指标 | 健康信号 | 异常信号 |
+|------|---------|---------|
+| episode_len | 持续增长 | 下降或平坦 |
+| learning_rate | > 0 且稳定 | = 0（策略冻结） |
+| reward (mean) | 正值且增长 | 持续负值 |
+| discriminator loss | 逐渐下降 | 不下降或爆炸 |
+
+### 7.3 "站立陷阱"分析
+
+**风险**：策略可能卡在站立/慢走，不愿冒摔倒风险去学跑步。
+
+**防护机制**：
+- 策略 obs 包含 cmd_vel → 可对不同速度命令输出不同动作
+- 判别器奖励跑步风格 → 站着不动 style_reward 低
+- 50% 命令要求非零速度 → 站着不动 velocity_reward = 0
+
+**监控**：如果 episode_len > 500 但 forward_vel 停滞在 < 1 m/s → 卡在慢走。
+**解决**：提高 command_prob_high 或增大 rew_velocity_tracking。
+
+---
+
+## 8. 环境搭建备忘
+
+### 8.1 RunPod 配置
 
 | 项目 | 值 |
 |------|-----|
@@ -232,74 +311,88 @@ ea.Reload()
 | 环境变量 | `ACCEPT_EULA=Y` |
 | Network Volume | `Isaac sim`，100GB，/workspace |
 | Python | `/isaac-sim/python.sh` |
+| Pod ID | x2d2bds0sb4kca |
 
-### 5.2 踩坑记录
+### 8.2 踩坑记录
 
 | # | 问题 | 解决 |
 |---|------|------|
-| 1 | PyPI `pinocchio` 包 (v0.1) 是假包 | 用 `pip install pin` 安装真正的 Pinocchio (v2.7.0) |
+| 1 | PyPI `pinocchio` 包 (v0.1) 是假包 | `pip install pin`（真正的 Pinocchio v2.7.0） |
 | 2 | `csv2npz_run.py` REPO_ROOT 路径错误 | 6层→7层 `..`（commit 44ff6ae） |
-| 3 | URDF mesh 路径 `package://g1_description/...` 找不到 | `--mesh_dir` 指向包含 `g1_description/` 的父目录 |
-| 4 | 系统 `pip`/`python3` 被劫持到不存在的路径 | 用 `/isaac-sim/python.sh -m pip` 或 `/isaac-sim/kit/python/bin/python3.11` |
-| 5 | TensorBoard 缺 markupsafe/numpy | `/isaac-sim/python.sh -m pip install markupsafe numpy` |
-| 6 | RunPod SSH 不支持端口转发 (`-L`) | 用 RunPod HTTP 代理：`https://<pod-id>-6006.proxy.runpod.net` |
-| 7 | tmux 中粘贴多行反斜杠命令被拆开 | 用单行命令，不用 `\` 换行 |
-| 8 | `reset_strategy="random"` 导致即时摔倒 | 改为 `"default"`（站立姿态重置） |
+| 3 | URDF mesh 路径 `package://` 找不到 | `--mesh_dir` 指向包含 `g1_description/` 的父目录 |
+| 4 | 系统 `pip`/`python3` 被劫持 | 用 `/isaac-sim/python.sh -m pip` |
+| 5 | TensorBoard 缺 markupsafe/numpy | `/isaac-sim/python.sh -m pip install markupsafe numpy tensorboard` |
+| 6 | RunPod SSH 不支持 `-L` 端口转发 | 用 HTTP 代理：`https://<pod-id>-6006.proxy.runpod.net` |
+| 7 | tmux 中粘贴多行 `\` 命令被拆开 | 用单行命令 |
+| 8 | `reset_strategy="random"` 即时摔倒 | 改 `"default"` |
+| 9 | `kl_threshold=0.008` → lr=0 | 改 0.02 |
+| 10 | 本地 conda 破坏 SSH (`OpenSSL mismatch`) | `export LD_LIBRARY_PATH=""` 后再 ssh |
 
-### 5.3 tmux 使用
+### 8.3 tmux 使用
 
 ```bash
-tmux new -s amp                    # 创建 session
-Ctrl+B, D                          # 断开
-tmux attach -t amp                 # 重连
-Ctrl+B, C                          # 新建窗口
-Ctrl+B, 0/1/n                      # 切换窗口
-tmux ls                            # 列出 sessions
-
-# 需要先安装: apt-get update && apt-get install -y tmux
+apt-get update && apt-get install -y tmux
+tmux new -s amp           # 创建
+Ctrl+B, D                 # 断开
+tmux attach -t amp        # 重连
+Ctrl+B, C                 # 新窗口
+Ctrl+B, 0/1/n             # 切换窗口
+tmux ls                   # 列出
 ```
 
-### 5.4 TensorBoard 启动
+### 8.4 TensorBoard
 
 ```bash
-# 安装（Isaac Sim python）
 /isaac-sim/python.sh -m pip install markupsafe numpy tensorboard
-
-# 启动
 /isaac-sim/python.sh -m tensorboard.main --logdir /workspace/robot_lab/logs/skrl/g1_amp_run --port 6006 --bind_all
+# 访问: https://<pod-id>-6006.proxy.runpod.net
+```
 
-# 访问方式：RunPod HTTP 代理
-# https://<pod-id>-6006.proxy.runpod.net
+### 8.5 环境恢复（Pod 重启后）
+
+```bash
+source /isaac-sim/setup_python_env.sh
+cd /workspace/IsaacLab
+/isaac-sim/python.sh -m pip install -e source/isaaclab
+/isaac-sim/python.sh -m pip install -e source/isaaclab_assets
+/isaac-sim/python.sh -m pip install -e source/isaaclab_tasks
+cd /workspace/robot_lab
+git pull
+/isaac-sim/python.sh -m pip install -e source/robot_lab
+/isaac-sim/python.sh -m pip install pin pandas  # 数据转换依赖
+apt-get update && apt-get install -y tmux
 ```
 
 ---
 
-## 6. 后续计划
+## 9. 后续计划
 
 ### 手动课程策略
 
 ```
-Run 2（当前）: default reset, prob_high=0.2, termination=0.25
-  ↓ 如果 episode_len > 200 步，forward_vel 跟踪 cmd_vel
-Run 3: prob_high=0.5, 可选 reset=random, termination=0.3
-  ↓ 用 --checkpoint 接着训练
-Run 4: 微调（如有需要）
+Run 2b（当前）: default reset, prob_high=0.2, kl_threshold=0.02
+  ↓ 目标: episode_len > 200+, forward_vel 开始跟踪
+Run 3: prob_high=0.5, 可选 termination=0.3
+  ↓ --checkpoint 续训，强化高速跑步
+Run 4: 微调（如有需要），可选 reset=random
 ```
 
-### 收敛判断标准
-
-| 指标 | 健康范围 | 异常处理 |
-|------|---------|---------|
-| episode_len | 持续增长趋近 1000 | 停滞/下降 → 检查 termination 和 reset |
-| disc_accuracy | 55-85% | >95% → 判别器过拟合 |
-| forward_vel | 趋近 cmd_vel 均值 | 停滞 → task_reward_weight 太小 |
-| rew_velocity | 趋近 1.0+ | <0.1 → 梯度消失 |
-
-### 恢复训练
+### 恢复训练命令
 
 ```bash
 /isaac-sim/python.sh scripts/reinforcement_learning/skrl/train.py \
-  --task=RobotLab-Isaac-G1-AMP-Run-Direct-v0 \
-  --algorithm AMP --headless --num_envs 4096 \
+  --task=RobotLab-Isaac-G1-AMP-Run-Direct-v0 --algorithm AMP \
+  --headless --num_envs 4096 \
   --checkpoint logs/skrl/g1_amp_run/<run_dir>/checkpoints/agent_XXXXX.pt
 ```
+
+---
+
+## 附录：Git Commit 记录
+
+| Commit | 内容 |
+|--------|------|
+| `44ff6ae` | 修复 csv2npz_run.py: Pinocchio 3.x 兼容 + REPO_ROOT 路径 |
+| `0c5abeb` | 修复训练: default reset, termination=0.25, prob_high=0.2 |
+| `15ad780` | 添加训练日志文档 |
+| `0fb6eec` | 修复 KL threshold: 0.008 → 0.02 |
