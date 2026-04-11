@@ -178,15 +178,9 @@ def main(env_cfg: DirectRLEnvCfg, experiment_cfg: dict):
             obs, rewards, _, _, _ = env_wrapped.step(actions)
             reward_sum += rewards.squeeze()
 
-        # --- camera tracking: lock to best robot after 2s ---
+        # --- camera tracking: always follow robot 0 (falls → auto reset → continue) ---
         if hasattr(raw_env, 'robot'):
-            if step == 120:  # at 2s (120 steps), pick the best robot and lock
-                pelvis_heights = raw_env.robot.data.body_pos_w[:, raw_env.ref_body_index, 2]
-                track_idx = pelvis_heights.argmax().item()
-                print(f"[CAM] Locked to robot {track_idx} (pelvis_h={pelvis_heights[track_idx]:.2f}m)")
-            if step < 120:
-                track_idx = 0  # default to first robot initially
-            robot_pos = raw_env.robot.data.body_pos_w[track_idx, raw_env.ref_body_index].cpu().numpy()
+            robot_pos = raw_env.robot.data.body_pos_w[0, raw_env.ref_body_index].cpu().numpy()
             cam_eye = [robot_pos[0] - 2.0, robot_pos[1] - 5.0, 1.5]
             cam_target = [robot_pos[0] + 1.0, robot_pos[1], 0.7]
             raw_env.sim.set_camera_view(cam_eye, cam_target)
