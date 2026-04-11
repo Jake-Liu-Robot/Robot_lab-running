@@ -166,6 +166,13 @@ def main(env_cfg: DirectRLEnvCfg, experiment_cfg: dict):
             obs, rewards, _, _, _ = env_wrapped.step(actions)
             reward_sum += rewards.squeeze()
 
+        # --- camera tracking: follow first robot ---
+        if hasattr(raw_env, 'robot') and step % 5 == 0:
+            robot_pos = raw_env.robot.data.body_pos_w[0, raw_env.ref_body_index].cpu().numpy()
+            cam_offset = [robot_pos[0] - 3.0, robot_pos[1] - 3.0, robot_pos[2] + 2.0]
+            cam_target = [robot_pos[0], robot_pos[1], robot_pos[2] + 0.5]
+            raw_env.sim.set_camera_view(cam_offset, cam_target)
+
         # --- print progress ---
         if (step + 1) % 300 == 0 or step == total_steps - 1:
             fwd_vel = 0.0
