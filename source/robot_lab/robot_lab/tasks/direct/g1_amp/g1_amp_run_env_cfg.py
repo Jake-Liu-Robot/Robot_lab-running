@@ -53,9 +53,9 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     command_vel_max: float = 4.0
     command_vel_low_cutoff: float = 1.0   # boundary between low/mid bands
     command_vel_high_cutoff: float = 3.0  # boundary between mid/high bands
-    command_prob_high: float = 0.2        # P(high band [3, 4]) — reduced from 0.5
+    command_prob_high: float = 0.4        # P(high band [3, 4]) — increased, robot can run now
     command_prob_mid: float = 0.3         # P(mid band [1, 3]) — jogging
-    # P(low band [0, 1]) = 1 - high - mid = 0.5 — standing/start practice (was 0.2)
+    # P(low band [0, 1]) = 1 - high - mid = 0.3 — standing/start
     command_duration_min: float = 3.0  # seconds
     command_duration_max: float = 7.0  # seconds
 
@@ -63,11 +63,11 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     rew_velocity_tracking: float = 1.5
 
     # --- regularization rewards ---
-    rew_upright: float = 0.2        # keep pelvis upright (z-up dot product)
+    rew_upright: float = 0.5        # keep pelvis upright (z-up dot product), increased for better posture
     rew_base_height: float = -2.0   # penalize deviation from target height
     target_base_height: float = 0.75  # G1 pelvis height during running (~m)
     rew_lateral_vel: float = -0.5   # penalize sideways drift
-    rew_yaw_rate: float = -0.1      # penalize spinning
+    rew_yaw_rate: float = -0.5      # penalize spinning, increased to prevent direction drift
     rew_action_rate: float = -0.05  # penalize jerky actions
 
     # --- disable env-side imitation (discriminator handles style) ---
