@@ -20,9 +20,14 @@ import numpy as np
 import pandas as pd
 import pinocchio as pin
 
+try:
+    from pinocchio.robot_wrapper import RobotWrapper
+except ImportError:
+    RobotWrapper = pin.RobotWrapper
+
 # --- defaults ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", "..", "..", "..", ".."))
+REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", "..", "..", "..", "..", ".."))
 
 DEFAULT_CSV = os.path.join(REPO_ROOT, "lafan1_g1", "g1", "run2_subject1.csv")
 DEFAULT_URDF = os.path.join(REPO_ROOT, "lafan1_g1", "robot_description", "g1", "g1_29dof_rev_1_0.urdf")
@@ -124,7 +129,7 @@ def main():
 
     # 2. Pinocchio FK
     print(f"Running FK with Pinocchio ({N} frames, {B} bodies)...")
-    robot = pin.RobotWrapper.BuildFromURDF(args.urdf, args.mesh_dir, pin.JointModelFreeFlyer())
+    robot = RobotWrapper.BuildFromURDF(args.urdf, args.mesh_dir, pin.JointModelFreeFlyer())
     model = robot.model
     data_pk = robot.data
 
