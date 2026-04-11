@@ -178,11 +178,12 @@ def main(env_cfg: DirectRLEnvCfg, experiment_cfg: dict):
             obs, rewards, _, _, _ = env_wrapped.step(actions)
             reward_sum += rewards.squeeze()
 
-        # --- camera tracking: always follow robot 0 (falls → auto reset → continue) ---
+        # --- camera tracking: behind-and-above, looking down at robot ---
         if hasattr(raw_env, 'robot'):
             robot_pos = raw_env.robot.data.body_pos_w[0, raw_env.ref_body_index].cpu().numpy()
-            cam_eye = [robot_pos[0] - 2.0, robot_pos[1] - 5.0, 1.5]
-            cam_target = [robot_pos[0] + 1.0, robot_pos[1], 0.7]
+            # Behind the robot, slightly above, looking down — ground always visible
+            cam_eye = [robot_pos[0] - 4.0, robot_pos[1] - 1.0, 2.5]
+            cam_target = [robot_pos[0] + 2.0, robot_pos[1], 0.0]
             raw_env.sim.set_camera_view(cam_eye, cam_target)
 
         # --- log every step to CSV ---
