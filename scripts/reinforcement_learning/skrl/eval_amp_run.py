@@ -144,6 +144,16 @@ def main(env_cfg: DirectRLEnvCfg, experiment_cfg: dict):
 
     # --- run evaluation ---
     obs, _ = env_wrapped.reset()
+
+    # Fix first-step mismatch: override velocity command after reset
+    # so the policy's first obs on step 1 has the correct cmd
+    if cmd_vel_mode == "fixed":
+        raw_env.velocity_commands[:] = fixed_vel
+        raw_env.command_time_left[:] = 999.0
+    elif cmd_vel_mode == "ramp":
+        raw_env.velocity_commands[:] = 4.0
+        raw_env.command_time_left[:] = 999.0
+
     total_steps = args_cli.video_length
     reward_sum = torch.zeros(args_cli.num_envs, device=raw_env.device)
 
