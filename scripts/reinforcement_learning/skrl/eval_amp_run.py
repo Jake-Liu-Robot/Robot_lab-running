@@ -47,7 +47,6 @@ simulation_app = app_launcher.app
 """Rest everything follows."""
 
 import os
-import time
 
 import gymnasium as gym
 import skrl
@@ -62,8 +61,6 @@ if version.parse(skrl.__version__) < version.parse(SKRL_VERSION):
 from skrl.utils.runner.torch import Runner
 
 from isaaclab.envs import DirectRLEnvCfg
-from isaaclab.utils.dict import print_dict
-
 from isaaclab_rl.skrl import SkrlVecEnvWrapper
 from isaaclab_tasks.utils.hydra import hydra_task_config
 
