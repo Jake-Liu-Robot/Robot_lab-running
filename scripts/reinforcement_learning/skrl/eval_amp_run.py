@@ -113,6 +113,9 @@ def main(env_cfg: DirectRLEnvCfg, experiment_cfg: dict):
         ckpt_name = os.path.splitext(os.path.basename(args_cli.checkpoint))[0]
         output_path = os.path.join(output_dir, f"eval_{ckpt_name}_{cmd_vel_mode}.mp4")
 
+    # --- enlarge ground plane for long-distance running ---
+    env_cfg.scene.env_spacing = 100.0  # default 4.0, need ~60m for 15s at 4m/s
+
     # --- create env ---
     env = gym.make(TASK, cfg=env_cfg, render_mode="rgb_array")
 
