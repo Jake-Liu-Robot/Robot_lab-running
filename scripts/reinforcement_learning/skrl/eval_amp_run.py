@@ -116,18 +116,8 @@ def main(env_cfg: DirectRLEnvCfg, experiment_cfg: dict):
     # --- keep envs close together, we only care about robot 0 ---
     env_cfg.scene.env_spacing = 5.0
 
-    # --- create env ---
+    # --- create env (ground plane is 500m x 500m in g1_amp_env.py) ---
     env = gym.make(TASK, cfg=env_cfg, render_mode="rgb_array")
-
-    # --- enlarge ground plane for long-distance running (4m/s × 20s = 80m) ---
-    import omni.usd
-    stage = omni.usd.get_context().get_stage()
-    ground_prim = stage.GetPrimAtPath("/World/ground")
-    if ground_prim.IsValid():
-        # Scale ground plane to 500m x 500m
-        from pxr import Gf
-        ground_prim.GetAttribute("xformOp:scale").Set(Gf.Vec3d(5.0, 5.0, 1.0))
-        print("[EVAL] Ground plane scaled to ~500m x 500m")
 
     video_kwargs = {
         "video_folder": output_dir,

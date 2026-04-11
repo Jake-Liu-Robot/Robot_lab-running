@@ -77,6 +77,7 @@ class G1AmpEnv(DirectRLEnv):
         spawn_ground_plane(
             prim_path="/World/ground",
             cfg=GroundPlaneCfg(
+                size=(500.0, 500.0),
                 physics_material=sim_utils.RigidBodyMaterialCfg(
                     static_friction=1.0,
                     dynamic_friction=1.0,
