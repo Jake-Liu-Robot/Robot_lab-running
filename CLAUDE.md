@@ -161,12 +161,17 @@ robot_lab/
         └── direct/g1_amp/                        # ← 路线 B（实际路径）
             ├── g1_amp_env.py                     # 基类（DirectRLEnv + G1AmpEnv）
             ├── g1_amp_env_cfg.py                 # G1AmpDanceEnvCfg
+            ├── g1_amp_run_env.py                 # 跑步环境（继承 G1AmpEnv）
+            ├── g1_amp_run_env_cfg.py             # 跑步配置（随机速度命令）
             ├── motions/
-            │   ├── motion_loader.py              # NPZ 加载器
-            │   ├── csv2npz.py                    # CSV→AMP NPZ（Pinocchio FK）
+            │   ├── motion_loader.py              # NPZ 加载器（插值+SLERP）
+            │   ├── csv2npz.py                    # CSV→AMP NPZ（Pinocchio FK，舞蹈）
+            │   ├── csv2npz_run.py                # CSV→AMP NPZ（Pinocchio FK，跑步）
             │   └── g1_dance1_subject2_30.npz     # 舞蹈参考数据
-            ├── agents/skrl_dance_amp_cfg.yaml
-            └── __init__.py                       # gym.register()
+            ├── agents/
+            │   ├── skrl_dance_amp_cfg.yaml       # 舞蹈 AMP 训练配置
+            │   └── skrl_run_amp_cfg.yaml         # 跑步 AMP 训练配置
+            └── __init__.py                       # gym.register() Dance + Run
 ```
 
 ---
@@ -352,7 +357,7 @@ cp lafan1_g1/g1/run2_subject1.csv \
 ### 已注册任务
 
 ```
-Dance:  RobotLab-Isaac-G1-AMP-Dance-Direct-v0  (原有)
+Dance:  RobotLab-Isaac-G1-AMP-Dance-Direct-v0  (原有，不修改)
 Run:    RobotLab-Isaac-G1-AMP-Run-Direct-v0    (新增)
 入口:   G1AmpRunEnv (继承 G1AmpEnv, Direct 工作流)
 RL:     skrl AMP（仅限 skrl，不可用 rsl_rl）
@@ -360,18 +365,47 @@ RL:     skrl AMP（仅限 skrl，不可用 rsl_rl）
 
 ### AMP-Run 核心设计
 
+**设计哲学**：判别器管"风格"（怎么跑），速度命令管"任务"（跑多快），两者解耦。
+
 **三网络架构**：Policy [1024,512] + Value [1024,512] + Discriminator [1024,512]
+
+**观测分离**（关键：防止判别器阻止速度泛化）：
+```
+Policy obs (109维): AMP obs(105) + root_vel_body(3) + cmd_vel(1)
+  → 策略知道当前速度和目标速度
+AMP obs (105维):    joint_pos(29) + joint_vel(29) + height(1) + orient(6) + key_body(39) + progress(1)
+  → 判别器看不到速度命令，不会惩罚"跑得比参考快"
+```
 
 **奖励组合**（skrl 内部）：
 ```
-r_total = 0.5 × r_task (env返回) + 0.5 × r_style (判别器)
+r_total = 0.7 × r_task (env返回) + 0.3 × r_style (判别器)
+# 0.7/0.3 确保速度命令主导，否则判别器的"跑步偏好"会阻止策略停下
+```
+
+**速度命令**（随机偏向高速采样）：
+```
+每 3-7s 采样一个新命令（偏向高速）：
+  50% → [3, 4] m/s（冲刺练习）
+  30% → [1, 3] m/s（慢跑）
+  20% → [0, 1] m/s（站立/起步）
+→ 策略自然学会加速、巡航、减速、站立
+→ 部署时发送任意速度序列（如 0→4→4→...→0）
+→ 不绑定 episode 时长，4 m/s 巡航可持续任意长度
+→ 切换均匀采样：command_prob_high=0.25, command_prob_mid=0.5
 ```
 
 **环境 task_reward** (`g1_amp_run_env.py`):
 ```
-velocity_tracking:  1.5 × exp(-4·(v_forward - 4.0)²)  ← 推向 4 m/s
-imitation (降权):   joint_pos(1.0) + joint_vel(0.5) + root_pos(0.5) + root_rot(0.25)
+velocity_tracking:  1.5 × exp(-4·(v_forward - cmd_vel)²)  ← 跟踪随机命令
+upright:            0.2 × pelvis_up_z                      ← 保持直立
+base_height:       -2.0 × (h - 0.75)²                     ← 重心高度约束
+lateral_vel:       -0.5 × vy²                              ← 抑制侧移
+yaw_rate:          -0.1 × ωz²                              ← 抑制转向
+action_rate:       -0.05 × Σ(Δa²)                          ← 动作平滑
 penalties:          action_l2(-0.1) + joint_limits(-10) + joint_acc(-1e-6) + joint_vel(-0.001)
+
+注意：无显式模仿奖励——判别器已承担风格约束
 ```
 
 **判别器 style_reward**:
@@ -380,6 +414,13 @@ penalties:          action_l2(-0.1) + joint_limits(-10) + joint_acc(-1e-6) + joi
 正样本: 参考运动数据 (学习"跑步风格")
 负样本: 策略产生的运动
 r_style = 2.0 × max(1 - 0.25·(1 - D_logit)², 0.0001)
+gradient_penalty = 5.0 (防止判别器过拟合)
+```
+
+**motion_speed（可选数据加速）**：
+```
+默认 1.0（原速）。如果判别器阻止高速跑步（forward_vel 停滞 + disc_accuracy > 95%），
+可设 1.3-1.5 加速参考数据（3.3 m/s → 4.3-5.0 m/s），代价是低速段 style reward 降低。
 ```
 
 ### 已实现的文件
@@ -387,10 +428,10 @@ r_style = 2.0 × max(1 - 0.25·(1 - D_logit)², 0.0001)
 | 文件 | 作用 |
 |------|------|
 | `g1_amp/__init__.py` | 注册 Dance + Run 两个任务 |
-| `g1_amp/g1_amp_run_env.py` | 继承 G1AmpEnv，添加速度奖励 |
-| `g1_amp/g1_amp_run_env_cfg.py` | 配置：target_vel=4.0, episode=20s |
-| `g1_amp/agents/skrl_run_amp_cfg.yaml` | task_w=0.5, style_w=0.5 |
-| `g1_amp/motions/csv2npz_run.py` | 参数化数据转换脚本 |
+| `g1_amp/g1_amp_run_env.py` | 继承 G1AmpEnv，随机速度命令 + 纯任务奖励 |
+| `g1_amp/g1_amp_run_env_cfg.py` | 配置：cmd_vel[0,4], episode=20s, obs=109 |
+| `g1_amp/agents/skrl_run_amp_cfg.yaml` | task_w=0.7, style_w=0.3 |
+| `g1_amp/motions/csv2npz_run.py` | 参数化数据转换脚本（Pinocchio FK） |
 
 ### 训练（RunPod）
 
@@ -414,9 +455,11 @@ r_style = 2.0 × max(1 - 0.25·(1 - D_logit)², 0.0001)
 
 | 指标 | 健康范围 | 异常处理 |
 |------|---------|---------|
-| disc_accuracy | 55-85% | >95% → 降 gradient_penalty 到 1.0 |
-| forward_velocity | 趋近 4.0 | 停滞 → 增大 task_reward_weight |
-| episode_length | 趋近 20s | <2s → 终止条件过严 |
+| disc_accuracy | 55-85% | >95% → 增大 gradient_penalty 或设 motion_speed=1.3 |
+| forward_vel | 趋近 cmd_vel 均值(~2) | 停滞 → 增大 task_reward_weight |
+| cmd_vel vs forward_vel | 两者趋势一致 | 不跟踪 → 检查 obs 是否包含 cmd_vel |
+| episode_length | 趋近 20s | <2s → termination_height 过高 |
+| rew_velocity | 趋近 1.0+ | 持续 <0.1 → velocity reward 梯度消失，靠判别器 bootstrap |
 
 ---
 

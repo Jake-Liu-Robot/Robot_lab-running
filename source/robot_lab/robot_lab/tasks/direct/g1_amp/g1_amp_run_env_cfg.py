@@ -14,23 +14,67 @@ MOTIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "motions"
 
 @configclass
 class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
-    """G1 AMP environment config for running task."""
+    """G1 AMP environment config for running task.
+
+    Reward design:
+      - AMP discriminator → style reward (running gait from reference data)
+      - Env → task reward (velocity command tracking + regularization)
+      - No env-side imitation — discriminator handles style enforcement
+
+    Velocity command:
+      - Random velocity sampled from [command_vel_min, command_vel_max]
+      - Held for a random duration [command_duration_min, command_duration_max]
+      - Policy learns to track ANY commanded speed, including 0 (stop)
+      - At deployment: send any velocity sequence (e.g. 0→4→4→...→0)
+
+    Motion speed-up:
+      - motion_speed > 1.0 scales reference data to faster speeds
+      - E.g. 1.3x turns 3.3 m/s peak → 4.3 m/s, gait pattern preserved
+    """
 
     # --- motion data ---
     motion_file = os.path.join(MOTIONS_DIR, "g1_run2_subject1_30.npz")
+    motion_speed: float = 1.0  # 1.0 = natural speed; increase if discriminator blocks high-speed running
 
     # --- episode ---
     episode_length_s = 20.0
 
+    # --- observation spaces ---
+    # Policy obs: base AMP obs (105) + root_vel_body (3) + target_vel (1) = 109
+    observation_space = 109
+    # AMP obs remains 105 (inherited): discriminator sees motion features only,
+    # no velocity command → won't penalize speed generalization
+
+    # --- velocity command (biased sampling) ---
+    # Three speed bands: low [0, 1), mid [1, 3), high [3, 4] m/s
+    # Biased toward high speed — 50% of training time at sprint speeds
+    # For uniform sampling, set: prob_high=0.25, prob_mid=0.5
+    command_vel_min: float = 0.0
+    command_vel_max: float = 4.0
+    command_vel_low_cutoff: float = 1.0   # boundary between low/mid bands
+    command_vel_high_cutoff: float = 3.0  # boundary between mid/high bands
+    command_prob_high: float = 0.5        # P(high band [3, 4]) — sprint practice
+    command_prob_mid: float = 0.3         # P(mid band [1, 3]) — jogging
+    # P(low band [0, 1]) = 1 - high - mid = 0.2 — standing/start practice
+    command_duration_min: float = 3.0  # seconds
+    command_duration_max: float = 7.0  # seconds
+
     # --- velocity tracking reward ---
-    target_velocity: float = 4.0
     rew_velocity_tracking: float = 1.5
 
-    # --- reduce imitation weights (AMP discriminator handles style) ---
-    rew_imitation_pos = 0.5
-    rew_imitation_rot = 0.25
-    rew_imitation_joint_pos = 1.0
-    rew_imitation_joint_vel = 0.5
+    # --- regularization rewards ---
+    rew_upright: float = 0.2        # keep pelvis upright (z-up dot product)
+    rew_base_height: float = -2.0   # penalize deviation from target height
+    target_base_height: float = 0.75  # G1 pelvis height during running (~m)
+    rew_lateral_vel: float = -0.5   # penalize sideways drift
+    rew_yaw_rate: float = -0.1      # penalize spinning
+    rew_action_rate: float = -0.05  # penalize jerky actions
+
+    # --- disable env-side imitation (discriminator handles style) ---
+    rew_imitation_pos = 0.0
+    rew_imitation_rot = 0.0
+    rew_imitation_joint_pos = 0.0
+    rew_imitation_joint_vel = 0.0
 
     # --- termination ---
     termination_height = 0.4

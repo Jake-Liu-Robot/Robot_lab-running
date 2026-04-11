@@ -16,23 +16,25 @@ Frame-by-frame trajectory imitation with anchor-relative tracking. The policy le
 
 ### AMP (Adversarial Motion Priors)
 
-Style-based imitation via a learned discriminator + task-specific velocity reward. The discriminator learns "what running looks like" while the velocity reward pushes toward a target speed.
+Style-based imitation via a learned discriminator + velocity command tracking. The discriminator learns "what running looks like" while random velocity commands drive the policy to track any speed from 0 to 4 m/s.
 
 - **RL framework**: skrl (PPO + AMP)
 - **Workflow**: Direct (Isaac Lab)
-- **Reward**: `0.5 x task_reward + 0.5 x style_reward`
-  - Task: forward velocity tracking (target: 4.0 m/s) + reduced imitation penalties
+- **Reward**: `0.7 x task_reward + 0.3 x style_reward`
+  - Task: velocity command tracking (random [0, 4] m/s) + regularization (upright, height, lateral, yaw, action rate)
   - Style: discriminator trained on reference running data (3-frame observation history)
-- **Key advantage**: Can potentially generalize beyond reference data speed
+  - No env-side imitation reward — discriminator handles all style enforcement
+- **Key design**: Observation split — policy sees velocity command (109-dim), discriminator does NOT (105-dim), preventing speed-constrained style enforcement
+- **Key advantage**: Generalizes beyond reference speed; can cruise at any speed for any duration
 - **Task**: `RobotLab-Isaac-G1-AMP-Run-Direct-v0`
 
 ## Architecture Comparison
 
 | | BeyondMimic | AMP-Run |
 |--|-------------|---------|
-| Imitation type | Frame-aligned trajectory | Style distribution |
-| Speed control | Fixed (follows reference) | Controllable (velocity reward) |
-| Generalization | None (reproduces reference only) | Can exceed reference speed |
+| Imitation type | Frame-aligned trajectory | Style distribution (discriminator) |
+| Speed control | Fixed (follows reference) | Controllable (random velocity commands) |
+| Generalization | None (reproduces reference only) | Any speed [0, 4] m/s, any duration |
 | Networks | Actor + Critic (asymmetric) | Actor + Critic + Discriminator |
 | RL library | rsl_rl (SGD) | skrl (Adam) |
 
@@ -61,9 +63,9 @@ source/robot_lab/robot_lab/tasks/
 │
 └── direct/g1_amp/                      # AMP pipeline
     ├── g1_amp_env.py                   # Base AMP environment (dance)
-    ├── g1_amp_run_env.py               # Running variant (+ velocity reward)
-    ├── g1_amp_run_env_cfg.py           # Running config (target_vel=4.0)
-    ├── agents/skrl_run_amp_cfg.yaml    # AMP training config
+    ├── g1_amp_run_env.py               # Running env (random vel cmds, no imitation)
+    ├── g1_amp_run_env_cfg.py           # Running config (cmd_vel[0,4], obs=109)
+    ├── agents/skrl_run_amp_cfg.yaml    # AMP training config (task=0.7, style=0.3)
     └── motions/
         ├── motion_loader.py            # NPZ loader with interpolation
         └── csv2npz_run.py              # LAFAN1 CSV -> AMP NPZ converter
@@ -94,9 +96,10 @@ Requires RunPod with NGC Docker image `nvcr.io/nvidia/isaac-lab:2.3.2`.
 ## Experimental Questions
 
 1. **Can BeyondMimic reproduce the 2-3 m/s running cycle?** (trajectory tracking accuracy)
-2. **Can AMP-Run match the running style from 2-3 m/s reference data?** (style transfer quality)
-3. **Can AMP-Run generalize to 4 m/s using velocity reward?** (beyond-reference generalization)
-4. **How do the two approaches compare on motion quality, robustness, and training efficiency?**
+2. **Can AMP-Run learn running style from 2-3 m/s data via discriminator?** (style transfer quality)
+3. **Can AMP-Run generalize to 4 m/s via velocity commands?** (beyond-reference generalization)
+4. **Can AMP-Run follow arbitrary velocity sequences (0→4→4→...→0)?** (command tracking)
+5. **How do the two approaches compare on motion quality, robustness, and training efficiency?**
 
 ## Tech Stack
 

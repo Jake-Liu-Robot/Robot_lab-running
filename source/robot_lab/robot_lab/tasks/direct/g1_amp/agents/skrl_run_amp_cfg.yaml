@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # AMP config for G1 running task
-# Key difference from dance: task_reward_weight=0.5, style_reward_weight=0.5
-# Task reward includes forward velocity tracking + reduced imitation
-# Style reward from AMP discriminator learns running gait pattern
+# Task reward (0.7): velocity command tracking + regularization (no env-side imitation)
+# Style reward (0.3): AMP discriminator learns running gait from reference data
+# 0.7/0.3 split ensures velocity command dominates over discriminator's running bias
 
 seed: 42
 
@@ -82,8 +82,8 @@ agent:
   value_loss_scale: 2.5
   discriminator_loss_scale: 5.0
   amp_batch_size: 512
-  task_reward_weight: 0.5
-  style_reward_weight: 0.5
+  task_reward_weight: 0.7
+  style_reward_weight: 0.3
   discriminator_batch_size: 4096
   discriminator_reward_scale: 2.0
   discriminator_logit_regularization_scale: 0.05
