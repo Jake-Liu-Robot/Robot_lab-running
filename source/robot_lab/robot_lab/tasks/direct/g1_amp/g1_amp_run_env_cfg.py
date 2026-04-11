@@ -45,17 +45,17 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     # AMP obs remains 105 (inherited): discriminator sees motion features only,
     # no velocity command → won't penalize speed generalization
 
-    # --- velocity command (biased sampling) ---
+    # --- velocity command (conservative start) ---
     # Three speed bands: low [0, 1), mid [1, 3), high [3, 4] m/s
-    # Biased toward high speed — 50% of training time at sprint speeds
-    # For uniform sampling, set: prob_high=0.25, prob_mid=0.5
+    # Start conservative — robot must learn to stand/walk before sprinting
+    # Increase prob_high later once forward_vel shows tracking ability
     command_vel_min: float = 0.0
     command_vel_max: float = 4.0
     command_vel_low_cutoff: float = 1.0   # boundary between low/mid bands
     command_vel_high_cutoff: float = 3.0  # boundary between mid/high bands
-    command_prob_high: float = 0.5        # P(high band [3, 4]) — sprint practice
+    command_prob_high: float = 0.2        # P(high band [3, 4]) — reduced from 0.5
     command_prob_mid: float = 0.3         # P(mid band [1, 3]) — jogging
-    # P(low band [0, 1]) = 1 - high - mid = 0.2 — standing/start practice
+    # P(low band [0, 1]) = 1 - high - mid = 0.5 — standing/start practice (was 0.2)
     command_duration_min: float = 3.0  # seconds
     command_duration_max: float = 7.0  # seconds
 
@@ -77,7 +77,7 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     rew_imitation_joint_vel = 0.0
 
     # --- termination ---
-    termination_height = 0.4
+    termination_height = 0.25  # lowered from 0.4 to give more learning time
 
     # --- reset ---
-    reset_strategy = "random"
+    reset_strategy = "default"  # start from standing pose; "random" was causing instant falls
