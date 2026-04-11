@@ -98,7 +98,7 @@ def main(env_cfg: DirectRLEnvCfg, experiment_cfg: dict):
         # we'll manually override commands each step, but set range wide
         env_cfg.command_vel_min = 0.0
         env_cfg.command_vel_max = 4.0
-        print("[EVAL] Ramp velocity: 0→4→4→0 m/s over 20s")
+        print("[EVAL] Ramp velocity: 4 m/s for 15s → 0 m/s for 5s")
     else:
         print("[EVAL] Random velocity commands (training distribution)")
 
@@ -152,16 +152,10 @@ def main(env_cfg: DirectRLEnvCfg, experiment_cfg: dict):
             raw_env.velocity_commands[:] = fixed_vel
             raw_env.command_time_left[:] = 999.0  # prevent resampling
         elif cmd_vel_mode == "ramp":
-            t = step / total_steps  # 0→1
-            if t < 0.1:       # 0-2s: stand
-                vel = 0.0
-            elif t < 0.3:     # 2-6s: accelerate 0→4
-                vel = 4.0 * (t - 0.1) / 0.2
-            elif t < 0.7:     # 6-14s: cruise at 4
+            t_sec = step / 60.0  # current time in seconds (60Hz)
+            if t_sec < 15.0:      # 0-15s: command 4 m/s (robot accelerates itself)
                 vel = 4.0
-            elif t < 0.9:     # 14-18s: decelerate 4→0
-                vel = 4.0 * (1.0 - (t - 0.7) / 0.2)
-            else:             # 18-20s: stand
+            else:                 # 15-20s: command 0 m/s (robot decelerates itself)
                 vel = 0.0
             raw_env.velocity_commands[:] = vel
             raw_env.command_time_left[:] = 999.0
