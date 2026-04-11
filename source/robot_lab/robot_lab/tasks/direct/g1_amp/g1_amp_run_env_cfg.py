@@ -63,7 +63,7 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     rew_velocity_tracking: float = 1.5
 
     # --- regularization rewards ---
-    rew_upright: float = 0.5        # keep pelvis upright (z-up dot product), increased for better posture
+    rew_upright: float = 1.0        # keep pelvis upright, strong penalty for tilt during standing
     rew_base_height: float = -2.0   # penalize deviation from target height
     target_base_height: float = 0.75  # G1 pelvis height during running (~m)
     rew_lateral_vel: float = -0.5   # penalize sideways drift
