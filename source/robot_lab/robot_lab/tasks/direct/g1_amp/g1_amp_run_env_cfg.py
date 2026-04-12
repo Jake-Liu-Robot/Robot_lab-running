@@ -79,13 +79,24 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     rew_imitation_joint_vel = 0.0
 
     # --- domain randomization ---
+    # Push perturbation
     push_enable: bool = True
     push_interval_min: float = 3.0    # seconds between pushes
     push_interval_max: float = 7.0
     push_force_min: float = 30.0      # Newtons (gentle)
     push_force_max: float = 100.0     # Newtons (moderate)
+    # Observation noise
     obs_noise_enable: bool = True
     obs_noise_std: float = 0.02       # small Gaussian noise on observations
+    # PD gain randomization (per-env, at reset)
+    pd_gain_random_enable: bool = True
+    pd_gain_random_range: float = 0.2  # ±20% variation
+    # Initial joint position offset (at reset)
+    joint_pos_offset_enable: bool = True
+    joint_pos_offset_std: float = 0.05  # radians (~3°)
+    # Added mass on torso (simulates payload uncertainty)
+    added_mass_enable: bool = True
+    added_mass_range: float = 2.0      # ±2 kg on torso
 
     # --- termination ---
     termination_height = 0.25  # lowered from 0.4 to give more learning time

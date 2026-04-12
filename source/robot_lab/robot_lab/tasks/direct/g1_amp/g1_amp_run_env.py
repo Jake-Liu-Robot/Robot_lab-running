@@ -44,9 +44,11 @@ class G1AmpRunEnv(G1AmpEnv):
         self.initial_heading_vec = torch.zeros(self.num_envs, 2, device=self.device)
         self.initial_heading_vec[:, 0] = 1.0  # default: facing +x
 
-        # Domain randomization: push timer
+        # Domain randomization buffers
         self.push_interval = torch.zeros(self.num_envs, device=self.device)
         self._randomize_push_timer(torch.arange(self.num_envs, device=self.device))
+        # PD gain scale per env (1.0 = nominal, randomized at reset)
+        self.pd_gain_scale = torch.ones(self.num_envs, self.cfg.action_space, device=self.device)
 
         # Speed up reference motion so discriminator learns faster gait
         if self.cfg.motion_speed != 1.0:
@@ -149,6 +151,17 @@ class G1AmpRunEnv(G1AmpEnv):
             self.cfg.command_duration_min
             + (self.cfg.command_duration_max - self.cfg.command_duration_min) * torch.rand(n, device=self.device)
         )
+
+    # ------------------------------------------------------------------ #
+    #  Action application with PD gain randomization
+    # ------------------------------------------------------------------ #
+
+    def _apply_action(self):
+        target = self.action_offset + self.action_scale * self.actions
+        if self.cfg.pd_gain_random_enable:
+            # Scale the action around offset to simulate PD gain variation
+            target = self.action_offset + self.pd_gain_scale * (target - self.action_offset)
+        self.robot.set_joint_position_target(target)
 
     # ------------------------------------------------------------------ #
     #  Pre-physics: tick command timer
@@ -355,3 +368,12 @@ class G1AmpRunEnv(G1AmpEnv):
         # Reset push timer
         if self.cfg.push_enable:
             self._randomize_push_timer(env_ids)
+        # Randomize PD gains per env
+        if self.cfg.pd_gain_random_enable:
+            r = self.cfg.pd_gain_random_range
+            self.pd_gain_scale[env_ids] = 1.0 + (2 * r * torch.rand(len(env_ids), self.cfg.action_space, device=self.device) - r)
+        # Randomize initial joint positions
+        if self.cfg.joint_pos_offset_enable:
+            offset = torch.randn(len(env_ids), self.cfg.action_space, device=self.device) * self.cfg.joint_pos_offset_std
+            current_pos = self.robot.data.joint_pos[env_ids].clone()
+            self.robot.write_joint_state_to_sim(current_pos + offset, self.robot.data.joint_vel[env_ids], None, env_ids)
