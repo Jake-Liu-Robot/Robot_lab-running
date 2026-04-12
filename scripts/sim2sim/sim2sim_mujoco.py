@@ -132,14 +132,14 @@ def setup_mujoco_model(xml_path):
     with open(xml_path, "r") as f:
         xml_content = f.read()
 
-    # Build actuator XML
+    # Build actuator XML using <general> for proper PD control
+    # force = kp * (ctrl - qpos) - kd * qvel
     actuator_xml = "  <actuator>\n"
     for jn in JOINT_NAMES:
         kp, kd = PD_GAINS[jn]
-        # MuJoCo position actuator: gainprm = kp, biasprm = [0, -kp, -kd]
         actuator_xml += (
-            f'    <position name="{jn}_actuator" joint="{jn}" '
-            f'kp="{kp}" kv="{kd}" '
+            f'    <general name="{jn}_actuator" joint="{jn}" '
+            f'gainprm="{kp} 0 0" biasprm="0 -{kp} -{kd}" '
             f'ctrlrange="-3.14159 3.14159"/>\n'
         )
     actuator_xml += "  </actuator>"
@@ -147,7 +147,15 @@ def setup_mujoco_model(xml_path):
     # Replace empty actuator section
     xml_content = xml_content.replace("  <actuator>\n  </actuator>", actuator_xml)
 
-    model = mujoco.MjModel.from_xml_string(xml_content)
+    # Write modified XML to temp file (same directory for mesh resolution)
+    import os
+    import tempfile
+    xml_dir = os.path.dirname(os.path.abspath(xml_path))
+    tmp_xml = os.path.join(xml_dir, "_sim2sim_temp.xml")
+    with open(tmp_xml, "w") as f:
+        f.write(xml_content)
+    model = mujoco.MjModel.from_xml_path(tmp_xml)
+    os.remove(tmp_xml)
     data = mujoco.MjData(model)
 
     # Set simulation timestep to match Isaac Lab (1/60 s)
@@ -357,17 +365,29 @@ def main():
     key_body_ids = [get_body_id(model, name) for name in KEY_BODY_NAMES]
     joint_qpos_ids, joint_qvel_ids = get_joint_ids(model, JOINT_NAMES)
 
-    # Action scaling
-    action_offset, action_scale = compute_action_scaling(model, joint_qpos_ids)
+    # Action scaling: prefer exported values from Isaac Lab, fallback to MuJoCo limits
+    if export.get("action_offset") is not None:
+        action_offset = export["action_offset"].numpy()
+        action_scale = export["action_scale"].numpy()
+        print("  Action scaling: from Isaac Lab export")
+    else:
+        action_offset, action_scale = compute_action_scaling(model, joint_qpos_ids)
+        print("  Action scaling: from MuJoCo joint limits (fallback)")
     print(f"  Ref body: {REF_BODY_NAME} (id={ref_body_id})")
     print(f"  Key bodies: {len(key_body_ids)}")
     print(f"  Joints: {len(joint_qpos_ids)}")
 
     # --- Reset to standing ---
     mujoco.mj_resetData(model, data)
-    # Set initial height (pelvis at ~0.75m)
-    data.qpos[2] = 0.75
+    # Free joint: qpos[0:3]=pos, qpos[3:7]=quat(w,x,y,z)
+    data.qpos[2] = 0.75   # pelvis height
+    data.qpos[3] = 1.0    # quat w (upright)
+    # Joint angles: use keyframe if available, otherwise zeros (default URDF pose)
+    if model.nkey > 0:
+        mujoco.mj_resetDataKeyframe(model, data, 0)
+        data.qpos[2] = 0.75  # override height
     mujoco.mj_forward(model, data)
+    print(f"  Initial pelvis height: {data.xpos[ref_body_id][2]:.3f}m")
 
     # --- Simulation loop ---
     dt = model.opt.timestep

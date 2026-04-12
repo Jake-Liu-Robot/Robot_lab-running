@@ -52,11 +52,24 @@ def main():
         shape = v.shape if hasattr(v, 'shape') else type(v).__name__
         print(f"  {key}: {shape}")
 
+    # --- Extract action scaling (if available) ---
+    action_offset = None
+    action_scale = None
+    for key, value in ckpt.items():
+        if "action_offset" in key:
+            action_offset = value
+            print(f"  Action offset: {key} → {value.shape}")
+        if "action_scale" in key:
+            action_scale = value
+            print(f"  Action scale: {key} → {value.shape}")
+
     # --- Save standalone policy ---
     export = {
         "policy_state": policy_state,
         "preprocessor_state": preprocessor_state,
         "log_std": log_std,
+        "action_offset": action_offset,
+        "action_scale": action_scale,
         "obs_dim": 109,
         "act_dim": 29,
         "hidden_dims": [1024, 512],
