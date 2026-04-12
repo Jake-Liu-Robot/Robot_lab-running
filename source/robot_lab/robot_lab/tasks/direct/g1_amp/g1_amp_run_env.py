@@ -40,6 +40,9 @@ class G1AmpRunEnv(G1AmpEnv):
         self.previous_actions = torch.zeros(self.num_envs, self.cfg.action_space, device=self.device)
         self.velocity_commands = torch.zeros(self.num_envs, device=self.device)
         self.command_time_left = torch.zeros(self.num_envs, device=self.device)
+        # Initial heading direction (set at reset, used for heading reward)
+        self.initial_heading_vec = torch.zeros(self.num_envs, 2, device=self.device)
+        self.initial_heading_vec[:, 0] = 1.0  # default: facing +x
 
         # Speed up reference motion so discriminator learns faster gait
         if self.cfg.motion_speed != 1.0:
@@ -195,6 +198,22 @@ class G1AmpRunEnv(G1AmpEnv):
         )
         self.previous_actions = self.actions.clone()
 
+        # ================= heading penalty (Plan C) ===================
+        # Penalize deviation from initial facing direction
+        forward_ref = torch.zeros(self.num_envs, 3, device=self.device)
+        forward_ref[:, 0] = 1.0
+        heading_vec = quat_apply(root_quat_w, forward_ref)  # current facing direction
+        heading_xy = heading_vec[:, :2]  # project to XY plane
+        # Dot product with initial heading (1.0 = aligned, 0 = 90° off)
+        heading_dot = (heading_xy * self.initial_heading_vec).sum(dim=-1)
+        rew_heading = self.cfg.rew_heading * (1.0 - heading_dot)  # 0 when aligned, negative when deviated
+
+        # ================= standing joint penalty (Plan D) ============
+        # Penalize joint velocity when cmd_vel is low (smooth standing)
+        low_speed_scale = torch.clamp(1.0 - cmd_vel, 0.0, 1.0)  # 1.0 when cmd=0, 0.0 when cmd>=1
+        joint_vel_sq = torch.sum(torch.square(self.robot.data.joint_vel), dim=-1)
+        rew_standing_still = self.cfg.rew_standing_still * low_speed_scale * joint_vel_sq
+
         # ================= basic penalties ============================
         basic_reward, basic_reward_log = compute_rewards(
             self.cfg.rew_termination,
@@ -218,6 +237,8 @@ class G1AmpRunEnv(G1AmpEnv):
             + rew_lateral_vel
             + rew_yaw_rate
             + rew_action_rate
+            + rew_heading
+            + rew_standing_still
             + basic_reward
         )
 
@@ -231,6 +252,9 @@ class G1AmpRunEnv(G1AmpEnv):
             "rew_lateral_vel": rew_lateral_vel.mean().item(),
             "rew_yaw_rate": rew_yaw_rate.mean().item(),
             "rew_action_rate": rew_action_rate.mean().item(),
+            "rew_heading": rew_heading.mean().item(),
+            "rew_standing_still": rew_standing_still.mean().item(),
+            "heading_dot": heading_dot.mean().item(),
             "total_reward": total_reward.mean().item(),
         }
         for key, value in basic_reward_log.items():
@@ -258,3 +282,12 @@ class G1AmpRunEnv(G1AmpEnv):
             env_ids = torch.arange(self.num_envs, device=self.device)
         self.previous_actions[env_ids] = 0.0
         self._resample_commands(env_ids)
+        # Record initial heading for heading reward
+        root_quat = self.robot.data.body_quat_w[env_ids, self.ref_body_index]
+        forward_ref = torch.zeros(len(env_ids), 3, device=self.device)
+        forward_ref[:, 0] = 1.0
+        heading = quat_apply(root_quat, forward_ref)
+        self.initial_heading_vec[env_ids] = heading[:, :2]
+        # Normalize
+        heading_norm = torch.norm(self.initial_heading_vec[env_ids], dim=-1, keepdim=True).clamp(min=1e-6)
+        self.initial_heading_vec[env_ids] /= heading_norm
