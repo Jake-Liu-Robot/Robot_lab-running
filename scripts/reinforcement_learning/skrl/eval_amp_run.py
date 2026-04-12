@@ -89,6 +89,14 @@ def main(env_cfg: DirectRLEnvCfg, experiment_cfg: dict):
     env_cfg.scene.num_envs = args_cli.num_envs
     env_cfg.seed = args_cli.seed
 
+    # --- disable domain randomization for clean evaluation ---
+    env_cfg.push_enable = False
+    env_cfg.obs_noise_enable = False
+    env_cfg.pd_gain_random_enable = False
+    env_cfg.joint_pos_offset_enable = False
+    env_cfg.added_mass_enable = False
+    print("[EVAL] Domain randomization disabled")
+
     # for fixed/ramp mode, override command range to prevent random resampling interfering
     if cmd_vel_mode == "fixed":
         env_cfg.command_vel_min = fixed_vel
