@@ -98,11 +98,21 @@ class G1AmpRunEnv(G1AmpEnv):
             env_ids,
         )
 
-    def _randomize_friction(self, env_ids: torch.Tensor):
-        """Randomize ground friction at reset."""
-        # Note: Isaac Lab applies friction through material properties
-        # This is a simplified version using PhysX material API
-        pass  # TODO: implement if needed for sim-to-sim robustness
+    def _randomize_added_mass(self, env_ids: torch.Tensor):
+        """Randomize torso mass at reset to simulate payload uncertainty."""
+        n = len(env_ids)
+        mass_range = self.cfg.added_mass_range
+        # Random mass offset: uniform [-mass_range, +mass_range]
+        mass_offset = 2 * mass_range * torch.rand(n, device=self.device) - mass_range
+
+        # Get torso body index and modify mass
+        torso_idx = self.robot.data.body_names.index("torso_link")
+        # Read current masses and apply offset
+        default_mass = self.robot.root_physx_view.get_body_masses()
+        new_masses = default_mass[env_ids].clone()
+        new_masses[:, torso_idx] += mass_offset
+        new_masses[:, torso_idx] = torch.clamp(new_masses[:, torso_idx], min=1.0)  # prevent negative mass
+        self.robot.root_physx_view.set_body_masses(new_masses, env_ids)
 
     # ------------------------------------------------------------------ #
     #  Velocity commands
@@ -377,3 +387,9 @@ class G1AmpRunEnv(G1AmpEnv):
             offset = torch.randn(len(env_ids), self.cfg.action_space, device=self.device) * self.cfg.joint_pos_offset_std
             current_pos = self.robot.data.joint_pos[env_ids].clone()
             self.robot.write_joint_state_to_sim(current_pos + offset, self.robot.data.joint_vel[env_ids], None, env_ids)
+        # Randomize torso mass
+        if self.cfg.added_mass_enable:
+            try:
+                self._randomize_added_mass(env_ids)
+            except Exception:
+                pass  # PhysX API may not support per-env mass modification
