@@ -512,50 +512,119 @@ style_reward_weight: 0.3 → 0.4
 | `style_weight` | 0.3 | **0.4** | 升 |
 | 域随机化 | 无 | **5 项** | 新增 |
 
-### 10.6 Run 4 — 训练中
+### 10.6 Run 4 结果（45K 步）
 
-从 Run 3 的 60K checkpoint 续训。
+```
+5K   → 689.9    域随机化导致下降
+10K  → 898.2    恢复中
+15K  → 928.5
+20K  → 935.4
+25K  → 957.9
+30K  → 982.4
+35K  → 977.6
+40K  → 983.9
+45K  → 985.9    平台（域随机化天花板）
+```
+
+**⚠️ 发现：eval 中域随机化未关闭，推扰在测试时也生效，导致视频中站立/跑步表现被推力干扰。**
+**修复：eval 脚本中关闭所有域随机化。**
+
+### 10.7 Run 4 Clean Eval（无域随机化）
+
+**跑步阶段（CSV 数据）：**
+```
+fwd_vel: mean=3.76, 略低于 4.0
+lat_vel: mean=0.12
+height:  mean=0.675
+```
+
+**站立阶段（CSV 数据）：**
+```
+fwd_vel: mean=0.35（应该是 0，策略还在走）
+height:  mean=0.674, min=0.636（膝盖仍弯曲，目标 0.75）
+```
+
+**关键奖励分析（定量诊断）：**
+
+| 奖励项 | 站立时的值 | 问题 |
+|--------|----------|------|
+| velocity_tracking | +0.91 | fwd=0.35 时仍得高分，策略没动力完全停下 |
+| upright | ~+0.95 | 还行 |
+| base_height | **-0.012** | ⚠️ 太弱！h=0.674 只扣 0.012，是速度奖励的 1.3% |
+| standing_still | 弱 | -0.005 被其他奖励淹没 |
+
+**结论：奖励信号太弱，不是训练不够。需要增强。**
+
+---
+
+## 11. 参数调整 #6 → Run 4b（2026-04-12）
+
+### 11.1 基于定量分析的调整
+
+| 参数 | Run 4 | Run 4b | 站立时惩罚变化 |
+|------|-------|--------|-------------|
+| `rew_base_height` | -2.0 | **-3.0** | -0.012 → -0.017/步 (+42%) |
+| `rew_heading` | -0.3 | **-0.5** | 加强方向纠正 |
+| `rew_standing_still` | -0.005 | **-0.01** | 翻倍，加强站立安静 |
+
+### 11.2 调参时机判断
+
+```
+什么时候该继续训练（不改参数）：
+  奖励信号足够强，但策略还没学会 → 继续训练
+  判断方法: episode_len 还在增长
+
+什么时候该改参数（不继续等）：
+  奖励信号本身太弱（如 base_height 只扣 1.3%）→ 再训多久都没用
+  判断方法: 用 CSV 分析各项奖励的实际值
+
+本次: base_height 惩罚只有速度奖励的 1.3% → 必须增强
+```
+
+### 11.3 Run 4b — 训练中
+
+从 Run 4 的 40K checkpoint 续训。
 
 ```bash
 /isaac-sim/python.sh scripts/reinforcement_learning/skrl/train.py \
   --task=RobotLab-Isaac-G1-AMP-Run-Direct-v0 --algorithm AMP \
   --headless --num_envs 4096 \
-  --checkpoint logs/skrl/g1_amp_run/2026-04-11_22-11-15_amp_torch/checkpoints/agent_60000.pt
+  --checkpoint logs/skrl/g1_amp_run/2026-04-12_02-29-52_amp_torch/checkpoints/agent_40000.pt
 ```
 
-**预期**：初期 episode_len 下降（域随机化增加难度），50K+ 步后恢复。
+**计划：训练 60-80K 步后 eval。**
 
 ---
 
 ## 9. 关键经验总结
 
-### 7.1 AMP 训练调参优先级
+### 9.1 AMP 训练调参优先级
 
 1. **reset_strategy**：最关键。`"random"` 对复杂运动（跑步）几乎必失败，应从 `"default"` 开始
 2. **termination_height**：过高 → episode 太短 → 学不到有效信号
 3. **command 分布**：初期偏向低速，让机器人先学站稳
 4. **kl_threshold**：AMP 训练策略变化大，默认 0.008 太小，建议 0.02+
+5. **eval 必须关闭域随机化**：训练用随机化，测试要干净环境
 
-### 7.2 判断训练是否正常
+### 9.2 判断训练是否正常
 
 | 指标 | 健康信号 | 异常信号 |
 |------|---------|---------|
 | episode_len | 持续增长 | 下降或平坦 |
 | learning_rate | > 0 且稳定 | = 0（策略冻结） |
-| reward (mean) | 正值且增长 | 持续负值 |
-| discriminator loss | 逐渐下降 | 不下降或爆炸 |
+| reward (mean) | 趋势上升 | 持续大幅下降 |
+| discriminator loss | 1.0-2.0 | <0.5（过强）或 >3.0（过弱） |
 
-### 7.3 "站立陷阱"分析
+### 9.3 调参决策流程
 
-**风险**：策略可能卡在站立/慢走，不愿冒摔倒风险去学跑步。
-
-**防护机制**：
-- 策略 obs 包含 cmd_vel → 可对不同速度命令输出不同动作
-- 判别器奖励跑步风格 → 站着不动 style_reward 低
-- 50% 命令要求非零速度 → 站着不动 velocity_reward = 0
-
-**监控**：如果 episode_len > 500 但 forward_vel 停滞在 < 1 m/s → 卡在慢走。
-**解决**：提高 command_prob_high 或增大 rew_velocity_tracking。
+```
+1. 训练 → 监控 episode_len 和 reward 趋势
+2. 平台期 → eval 录视频 + CSV
+3. 分析 CSV → 计算各项奖励的实际值
+4. 找出太弱的惩罚项 → 增强 50-100%
+5. 从最新 checkpoint 继续训练 60-80K 步
+6. 重复
+```
 
 ---
 
@@ -737,11 +806,17 @@ Run 3b (65K步) — 失败
   步态严重退化，disc_loss 降到 0.80
   教训: 不要同时大幅改多个参数
 
-Run 4 (进行中) — 精准修复 + 域随机化
+Run 4 (45K步) — 精准修复 + 域随机化
   新增: heading=-0.3, standing_still=-0.005
-  style_weight: 0.3→0.4
-  域随机化: 推扰+噪声+PD随机+关节偏移+附加质量
-  从 Run 3 的 60K checkpoint 续训
+  style_weight: 0.3→0.4, 域随机化 5项
+  episode_len: 690→986（域随机化天花板）
+  Eval(clean): 跑步方向改善, 站立仍半蹲
+  诊断: base_height惩罚只占速度奖励的1.3%（太弱）
+
+Run 4b (进行中) — 增强弱奖励
+  base_height: -2→-3, heading: -0.3→-0.5, standing_still: -0.005→-0.01
+  基于CSV定量分析的调参
+  从 Run 4 的 40K checkpoint 续训
 ```
 
 ## 附录 C：Git Commit 记录
@@ -765,3 +840,6 @@ Run 4 (进行中) — 精准修复 + 域随机化
 | `f261f5e` | 域随机化: PD gain + joint offset |
 | `dafb2e4` | 域随机化: added mass |
 | `bad3d7d` | sim-to-sim: export_policy.py + sim2sim_mujoco.py |
+| `e1ba89d` | sim-to-sim 修复: actuator/action_scale/mesh |
+| `ec577d2` | eval 关闭域随机化 |
+| `b978c03` | Run 4b: base_height=-3, heading=-0.5, standing=-0.01 |
