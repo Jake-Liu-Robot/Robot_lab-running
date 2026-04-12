@@ -78,6 +78,15 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     rew_imitation_joint_pos = 0.0
     rew_imitation_joint_vel = 0.0
 
+    # --- domain randomization ---
+    push_enable: bool = True
+    push_interval_min: float = 3.0    # seconds between pushes
+    push_interval_max: float = 7.0
+    push_force_min: float = 30.0      # Newtons (gentle)
+    push_force_max: float = 100.0     # Newtons (moderate)
+    obs_noise_enable: bool = True
+    obs_noise_std: float = 0.02       # small Gaussian noise on observations
+
     # --- termination ---
     termination_height = 0.25  # lowered from 0.4 to give more learning time
 

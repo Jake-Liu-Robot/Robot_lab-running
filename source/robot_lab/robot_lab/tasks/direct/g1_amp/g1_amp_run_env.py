@@ -44,6 +44,10 @@ class G1AmpRunEnv(G1AmpEnv):
         self.initial_heading_vec = torch.zeros(self.num_envs, 2, device=self.device)
         self.initial_heading_vec[:, 0] = 1.0  # default: facing +x
 
+        # Domain randomization: push timer
+        self.push_interval = torch.zeros(self.num_envs, device=self.device)
+        self._randomize_push_timer(torch.arange(self.num_envs, device=self.device))
+
         # Speed up reference motion so discriminator learns faster gait
         if self.cfg.motion_speed != 1.0:
             s = self.cfg.motion_speed
@@ -57,6 +61,46 @@ class G1AmpRunEnv(G1AmpEnv):
                 f"duration {self._motion_loader.duration:.1f}s, "
                 f"dt {self._motion_loader.dt:.4f}s"
             )
+
+    # ------------------------------------------------------------------ #
+    #  Domain Randomization
+    # ------------------------------------------------------------------ #
+
+    def _randomize_push_timer(self, env_ids: torch.Tensor):
+        """Randomize time until next push."""
+        n = len(env_ids)
+        self.push_interval[env_ids] = (
+            self.cfg.push_interval_min
+            + (self.cfg.push_interval_max - self.cfg.push_interval_min) * torch.rand(n, device=self.device)
+        )
+
+    def _apply_random_push(self, env_ids: torch.Tensor):
+        """Apply random external force to pelvis."""
+        n = len(env_ids)
+        # Random force in XY plane
+        force_mag = self.cfg.push_force_min + (
+            self.cfg.push_force_max - self.cfg.push_force_min
+        ) * torch.rand(n, device=self.device)
+        angle = 2 * 3.14159 * torch.rand(n, device=self.device)
+        forces = torch.zeros(n, 3, device=self.device)
+        forces[:, 0] = force_mag * torch.cos(angle)
+        forces[:, 1] = force_mag * torch.sin(angle)
+
+        # Apply as velocity impulse (force * dt / mass ≈ velocity change)
+        robot_mass = 50.0  # approximate G1 mass in kg
+        vel_change = forces / robot_mass
+        current_vel = self.robot.data.root_com_vel_w[env_ids, :3].clone()
+        current_vel[:, :2] += vel_change[:, :2]
+        self.robot.write_root_com_velocity_to_sim(
+            torch.cat([current_vel, self.robot.data.root_com_vel_w[env_ids, 3:]], dim=-1),
+            env_ids,
+        )
+
+    def _randomize_friction(self, env_ids: torch.Tensor):
+        """Randomize ground friction at reset."""
+        # Note: Isaac Lab applies friction through material properties
+        # This is a simplified version using PhysX material API
+        pass  # TODO: implement if needed for sim-to-sim robustness
 
     # ------------------------------------------------------------------ #
     #  Velocity commands
@@ -118,6 +162,15 @@ class G1AmpRunEnv(G1AmpEnv):
         if expired.any():
             self._resample_commands(expired.nonzero(as_tuple=False).squeeze(-1))
 
+        # Domain randomization: random push
+        if self.cfg.push_enable:
+            dt = self.physics_dt * self.cfg.decimation
+            self.push_interval -= dt
+            push_envs = (self.push_interval <= 0).nonzero(as_tuple=False).squeeze(-1)
+            if len(push_envs) > 0:
+                self._apply_random_push(push_envs)
+                self._randomize_push_timer(push_envs)
+
     # ------------------------------------------------------------------ #
     #  Observations
     # ------------------------------------------------------------------ #
@@ -153,6 +206,12 @@ class G1AmpRunEnv(G1AmpEnv):
         cmd_vel = self.velocity_commands.unsqueeze(-1)  # (num_envs, 1)
 
         policy_obs = torch.cat([amp_obs, root_vel_b, cmd_vel], dim=-1)
+
+        # --- observation noise (domain randomization) ---
+        if self.cfg.obs_noise_enable:
+            noise = torch.randn_like(policy_obs) * self.cfg.obs_noise_std
+            policy_obs = policy_obs + noise
+
         return {"policy": policy_obs}
 
     # ------------------------------------------------------------------ #
@@ -293,3 +352,6 @@ class G1AmpRunEnv(G1AmpEnv):
         # Normalize
         heading_norm = torch.norm(self.initial_heading_vec[env_ids], dim=-1, keepdim=True).clamp(min=1e-6)
         self.initial_heading_vec[env_ids] /= heading_norm
+        # Reset push timer
+        if self.cfg.push_enable:
+            self._randomize_push_timer(env_ids)
