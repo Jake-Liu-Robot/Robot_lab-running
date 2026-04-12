@@ -209,8 +209,10 @@ class G1AmpRunEnv(G1AmpEnv):
         rew_heading = self.cfg.rew_heading * (1.0 - heading_dot)  # 0 when aligned, negative when deviated
 
         # ================= standing joint penalty (Plan D) ============
-        # Penalize joint velocity when cmd_vel is low (smooth standing)
-        low_speed_scale = torch.clamp(1.0 - cmd_vel, 0.0, 1.0)  # 1.0 when cmd=0, 0.0 when cmd>=1
+        # Penalize joint velocity when ACTUAL speed is low (smooth standing)
+        # Use actual forward velocity, not cmd — avoids harsh penalty during deceleration
+        actual_speed = torch.abs(forward_vel)
+        low_speed_scale = torch.clamp(1.0 - actual_speed, 0.0, 1.0)  # 1.0 when stopped, 0.0 when v>=1
         joint_vel_sq = torch.sum(torch.square(self.robot.data.joint_vel), dim=-1)
         rew_standing_still = self.cfg.rew_standing_still * low_speed_scale * joint_vel_sq
 
