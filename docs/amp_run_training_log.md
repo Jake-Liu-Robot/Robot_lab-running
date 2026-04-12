@@ -374,33 +374,156 @@ t=20s:  cmd=0.0  fwd=0.01 m/s   完全静止
 
 **joint_vel 没有改**：增大 5 倍会严重影响跑步（跑步时关节速度大 → 惩罚可达 -5.0/步）
 
-### 8.3 训练 Run 3 — 进行中
+### 8.3 Run 3 结果（65K 步）
 
-从 180K checkpoint 续训：
+```
+5K   → 794.7    适应新奖励
+10K  → 1115.9   快速恢复
+20K  → 1044.0   波动
+30K  → 1175.9   收敛
+40K  → 1179.1
+50K  → 1178.3
+60K  → 1185.5   稳定
+65K  → reward=0.74, disc_loss=1.68
+```
+
+**Eval 结果（60K checkpoint）**：
+- 速度跟踪：3.84-4.02 m/s ✅（和 Run 2b 一致）
+- upright=1.0 没有影响跑步 ✓
+- **站立改善有限**：上身更直，但膝盖仍弯曲（半蹲 h=0.67）
+- **跑步方向仍偏转**：约 5s 后明显偏斜
+
+---
+
+## 9. 参数调整 #4 → Run 3b — 失败（2026-04-12）
+
+### 9.1 修改内容
+
+| 参数 | Run 3 | Run 3b | 目的 |
+|------|-------|--------|------|
+| `rew_yaw_rate` | -0.5 | **-1.0** | 修方向偏转 |
+| `rew_base_height` | -2.0 | **-5.0** | 修半蹲 |
+
+### 9.2 结果 — 失败
+
+```
+5K   → 865.8
+20K  → 1164.1
+55K  → 1057.9（突然下降）
+65K  → 1189.9（恢复但步态崩溃）
+```
+
+**Eval 视频观察**：
+- 跑步姿态严重退化：腿部夸张、身体侧倾
+- 站立更差：深蹲姿态
+- 判别器 loss 降到 0.80（判别器过强）
+
+### 9.3 失败分析
+
+**根本原因：同时改两个大幅度参数 + 判别器过拟合**
+
+| 因素 | 说明 |
+|------|------|
+| yaw_rate ×2 | 转向惩罚过强，策略找不到自然步态 |
+| base_height ×2.5 | 跑步时 h=0.68 被惩罚过重，策略试图保持 0.75 → 步态不自然 |
+| disc_loss 0.80 | 判别器太强，style_reward 梯度弱，策略失去风格引导 |
+
+**教训：一次最多改 1-2 个参数，幅度不超过 50%。Run 3b 两个参数都 ×2 以上 → 崩溃。**
+
+### 9.4 回退
+
+回退到 Run 3 的配置（yaw=-0.5, base_height=-2.0），从 Run 3 的 60K checkpoint 继续。
+
+---
+
+## 10. 参数调整 #5 → Run 4（2026-04-12）
+
+### 10.1 设计思路
+
+Run 3 的两个核心问题需要**不同的解决方式**：
+
+| 问题 | 之前的方式（失败） | 新方式（Run 4） |
+|------|-----------------|---------------|
+| 跑步方向偏转 | 增大 yaw_rate（治标） | **添加 heading 奖励**（治本：惩罚朝向偏差） |
+| 站立摇晃/半蹲 | 增大 base_height（太激进） | **低速关节惩罚**（只影响站立，不影响跑步） |
+
+### 10.2 新增奖励项
+
+**方案 C — Heading 奖励（纠正方向偏转）**
+
+```python
+# 计算当前面朝方向与初始方向的偏差
+heading_vec = quat_apply(root_quat, [1,0,0])  # 当前朝向（世界坐标）
+heading_dot = heading_xy · initial_heading_vec  # cos(偏转角)
+rew_heading = -0.3 × (1.0 - heading_dot)       # 偏了就扣分
+
+偏 0°:  惩罚 = 0（完美）
+偏 15°: 惩罚 = -0.01/步（轻微）
+偏 30°: 惩罚 = -0.04/步（明显）
+偏 90°: 惩罚 = -0.30/步（严重）
+```
+
+**关键**：策略可以通过 obs 中的 `tangent`（6 维，包含当前朝向）感知偏转方向，并学会纠正。不需要改 obs 空间。
+
+**方案 D — 低速关节惩罚（改善站立姿态）**
+
+```python
+# 只在实际速度低时惩罚关节运动
+actual_speed = abs(forward_vel)
+low_speed_scale = clamp(1.0 - actual_speed, 0, 1)  # 基于实际速度，非 cmd
+rew_standing_still = -0.005 × low_speed_scale × Σ(joint_vel²)
+
+跑步 4m/s: scale=0 → 无惩罚 ✓
+减速 2m/s: scale=0 → 无惩罚 ✓
+减速 0.5m/s: scale=0.5 → 半力惩罚（平滑过渡）
+站立 0m/s: scale=1.0 → 全力惩罚 → 关节安静
+```
+
+### 10.3 Style Weight 调整
+
+```yaml
+task_reward_weight: 0.7 → 0.6
+style_reward_weight: 0.3 → 0.4
+```
+
+参考数据中有 9% 的站立片段。增大 style_weight 让判别器的站立风格信号更强。
+
+### 10.4 域随机化
+
+| # | 类型 | 参数 | 时机 | 目的 |
+|---|------|------|------|------|
+| 1 | 随机推扰 | 30-100N, 每 3-7s | 运行中 | 抗外力干扰 |
+| 2 | 观测噪声 | σ=0.02 | 每步 | 防传感器过拟合 |
+| 3 | PD 增益随机 | ±20% | 每次 reset | 适应不同执行器 |
+| 4 | 关节初始偏移 | ±0.05 rad | 每次 reset | 适应不精确初始化 |
+| 5 | 附加质量 | ±2 kg (torso) | 每次 reset | 质量不确定性 |
+
+### 10.5 完整 Run 4 配置
+
+| 参数 | Run 3 | Run 4 | 变化 |
+|------|-------|-------|------|
+| `rew_upright` | 1.0 | 1.0 | 不变 |
+| `rew_yaw_rate` | -0.5 | -0.5 | 不变 |
+| `rew_base_height` | -2.0 | -2.0 | 不变 |
+| `rew_action_rate` | -0.1 | -0.1 | 不变 |
+| `rew_heading` | — | **-0.3** | 新增 |
+| `rew_standing_still` | — | **-0.005** | 新增 |
+| `task_weight` | 0.7 | **0.6** | 降 |
+| `style_weight` | 0.3 | **0.4** | 升 |
+| 域随机化 | 无 | **5 项** | 新增 |
+
+### 10.6 Run 4 — 训练中
+
+从 Run 3 的 60K checkpoint 续训。
+
 ```bash
 /isaac-sim/python.sh scripts/reinforcement_learning/skrl/train.py \
   --task=RobotLab-Isaac-G1-AMP-Run-Direct-v0 --algorithm AMP \
   --headless --num_envs 4096 \
-  --checkpoint logs/skrl/g1_amp_run/2026-04-11_16-21-16_amp_torch/checkpoints/agent_180000.pt
+  --checkpoint logs/skrl/g1_amp_run/2026-04-11_22-11-15_amp_torch/checkpoints/agent_60000.pt
 ```
 
-### 8.4 Run 3 早期指标（20K 步）
-
-```
-5K   → 794.7   （奖励变化导致初始下降，正常）
-10K  → 1115.9  （快速恢复）
-15K  → 1153.6  （接近之前水平）
-20K  → 1044.0  （波动，待观察）
-```
-
-| 指标 | 值 | 判断 |
-|------|-----|------|
-| Episode length | 1044 | 波动中，需要更多数据 |
-| Reward (mean) | 0.68 | ✅ 高于 Run 2b (0.55)，upright 奖励贡献 |
-| Learning rate | 1.3e-4 | ✅ 健康 |
-| Discriminator loss | 1.67 | ✅ 健康 |
-
-**待 50K 步后评估趋势。**
+**预期**：初期 episode_len 下降（域随机化增加难度），50K+ 步后恢复。
 
 ---
 
@@ -501,14 +624,28 @@ apt-get update && apt-get install -y tmux
 
 ---
 
-## 11. 后续计划
+## 12. 后续计划
 
-### Run 3 完成后
+### Run 4 完成后
 
-1. Eval 评估：`--cmd_vel ramp` 对比站立姿态是否改善
-2. 如果站立仍然摇晃：考虑增大 `rew_action_rate` → -0.15
-3. 如果跑步方向仍偏移：考虑添加全局方向奖励
-4. 考虑继续训练到 500K 总步数
+1. Eval 评估：`--cmd_vel ramp` 对比方向偏转和站立姿态
+2. 如果方向仍偏转：增大 `rew_heading`（-0.3 → -0.5）
+3. 如果站立仍差：增大 `rew_standing_still`（-0.005 → -0.01）
+4. Sim-to-sim：导出策略到 MuJoCo 验证
+
+### Sim-to-Sim 流程
+
+```bash
+# 1. RunPod: 导出策略
+/isaac-sim/python.sh scripts/sim2sim/export_policy.py \
+  --checkpoint <best_checkpoint.pt> --output policy_exported.pt
+
+# 2. 下载到本地
+
+# 3. 本地: MuJoCo 推理
+python scripts/sim2sim/sim2sim_mujoco.py \
+  --policy policy_exported.pt --cmd_vel ramp
+```
 
 ### Eval 测试命令
 
@@ -538,20 +675,39 @@ apt-get update && apt-get install -y tmux
 
 ---
 
-## 附录 A：Git Commit 记录
+## 附录 A：调参方法论
 
-| Commit | 内容 |
-|--------|------|
-| `44ff6ae` | 修复 csv2npz_run.py: Pinocchio 3.x 兼容 + REPO_ROOT 路径 |
-| `0c5abeb` | Run 2: default reset, termination=0.25, prob_high=0.2 |
-| `0fb6eec` | 修复 KL threshold: 0.008 → 0.02 |
-| `e16acc6` | 修复 play.py: pretrained_checkpoint import |
-| `a460e97` | 添加 eval_amp_run.py 评估脚本 |
-| `951e389` | Ramp 模式：4m/s 15s → 0m/s 5s |
-| `f40aad6` | 地面扩大到 500m × 500m |
-| `c698b4f` | Run 3: upright=1.0, yaw_rate=-0.5, prob_high=0.4 |
-| `531c48b` | Run 3: action_rate=-0.1 |
-| `490f056` | Run 3: upright 确认 1.0 |
+### 迭代流程
+
+```
+训练 → 监控指标 → Eval 视频/CSV → 发现问题 → 分析原因 → 调整奖励 → 从 checkpoint 继续训练
+```
+
+### 关键原则
+
+1. **一次最多改 2 个参数**，幅度不超过 50%（Run 3b 教训）
+2. **先观察再调整**：每次修改后至少训练 50K 步看趋势
+3. **保守优先**：小幅调整多次迭代，好过一次大改
+4. **区分治标和治本**：
+   - yaw_rate 治标（惩罚转动过程），heading 治本（惩罚偏转结果）
+   - base_height 全局影响跑步，standing_still 只影响站立
+5. **新增奖励项 > 增大现有权重**：新增项可以精确定向解决问题
+
+### 奖励权重平衡
+
+```
+主导奖励:
+  velocity_tracking: 1.5 × 0.6(task_w) = 0.90（最高，驱动跑步）
+  upright:          1.0（驱动站直）
+  
+惩罚项（负值，越小影响越大）:
+  yaw_rate:          -0.5 × ωz²（防转向）
+  lateral_vel:       -0.5 × vy²（防侧移）
+  heading:           -0.3 × (1-cosθ)（防方向偏转）
+  base_height:       -2.0 × (h-0.75)²（防蹲下）
+  action_rate:       -0.1 × Σ(Δa²)（防抖动）
+  standing_still:    -0.005 × scale × Σ(vel²)（低速关节安静）
+```
 
 ## 附录 B：训练历程总览
 
@@ -559,18 +715,53 @@ apt-get update && apt-get install -y tmux
 Run 1 (50K步) — 失败
   reset=random, termination=0.4, prob_high=0.5
   episode_len: 17→15（下降，即时摔倒）
+  原因: 随机初始姿态 + 过激速度命令
   
 Run 2 (55K步) — 部分成功
   reset=default, termination=0.25, prob_high=0.2
   episode_len: 17→118（大幅改善，但 lr→0 冻结）
+  原因: kl_threshold=0.008 太小
 
-Run 2b (185K步) — 成功
+Run 2b (185K步) — 跑步成功
   kl_threshold: 0.008→0.02（修复 lr）
   episode_len: 118→1177（收敛，接近满分）
-  Eval: 4.0 m/s 稳定巡航 ✅，站立姿态差 ⚠️
+  Eval: 4.0 m/s 稳定巡航 ✅，站立姿态差 ⚠️，方向偏转 ⚠️
 
-Run 3 (进行中) — 改善姿态
+Run 3 (60K步) — 姿态略改善
   upright=1.0, yaw_rate=-0.5, action_rate=-0.1, prob_high=0.4
   从 180K checkpoint 续训
-  早期: 794→1044（适应新奖励中）
+  Eval: 跑步正常，站立上身更直但膝盖仍弯，方向仍偏
+
+Run 3b (65K步) — 失败
+  yaw_rate=-1.0, base_height=-5.0（两个都改太多）
+  步态严重退化，disc_loss 降到 0.80
+  教训: 不要同时大幅改多个参数
+
+Run 4 (进行中) — 精准修复 + 域随机化
+  新增: heading=-0.3, standing_still=-0.005
+  style_weight: 0.3→0.4
+  域随机化: 推扰+噪声+PD随机+关节偏移+附加质量
+  从 Run 3 的 60K checkpoint 续训
 ```
+
+## 附录 C：Git Commit 记录
+
+| Commit | 内容 |
+|--------|------|
+| `44ff6ae` | 修复 csv2npz_run.py: Pinocchio 兼容 + 路径 |
+| `0c5abeb` | Run 2: default reset, termination=0.25 |
+| `0fb6eec` | 修复 KL threshold: 0.008 → 0.02 |
+| `e16acc6` | 修复 play.py import |
+| `a460e97` | 添加 eval_amp_run.py |
+| `951e389` | Ramp 模式: 4m/s 15s → 0m/s 5s |
+| `f40aad6` | 地面扩大 500m |
+| `c698b4f` | Run 3: upright=1.0, yaw=-0.5, prob_high=0.4 |
+| `531c48b` | Run 3: action_rate=-0.1 |
+| `739c7be` | Run 3b: yaw=-1.0, base_height=-5.0（失败，已回退） |
+| `c6c65ee` | 回退 Run 3b |
+| `2007c73` | Run 4: heading + standing_still + style_weight=0.4 |
+| `95946af` | 修复 standing 惩罚: 基于实际速度 |
+| `aa37ceb` | 域随机化: push + obs_noise |
+| `f261f5e` | 域随机化: PD gain + joint offset |
+| `dafb2e4` | 域随机化: added mass |
+| `bad3d7d` | sim-to-sim: export_policy.py + sim2sim_mujoco.py |
