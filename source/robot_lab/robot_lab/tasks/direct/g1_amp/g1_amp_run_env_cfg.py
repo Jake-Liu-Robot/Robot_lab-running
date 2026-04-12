@@ -64,13 +64,13 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
 
     # --- regularization rewards ---
     rew_upright: float = 1.0        # keep pelvis upright, strong penalty for tilt during standing
-    rew_base_height: float = -2.0   # penalize deviation from target height (reverted, -5.0 broke gait)
+    rew_base_height: float = -3.0   # penalize deviation from target height (was -2.0, h=0.674 only -0.012)
     target_base_height: float = 0.75  # G1 pelvis height during running (~m)
     rew_lateral_vel: float = -0.5   # penalize sideways drift
     rew_yaw_rate: float = -0.5      # penalize spinning (reverted, -1.0 broke gait)
     rew_action_rate: float = -0.1   # penalize jerky actions, increased for smoother standing
-    rew_heading: float = -0.3       # penalize deviation from initial heading direction
-    rew_standing_still: float = -0.005  # penalize joint velocity when cmd_vel < 1 (standing only)
+    rew_heading: float = -0.5       # penalize deviation from initial heading direction (was -0.3)
+    rew_standing_still: float = -0.01  # penalize joint velocity when actual speed < 1 (was -0.005)
 
     # --- disable env-side imitation (discriminator handles style) ---
     rew_imitation_pos = 0.0
