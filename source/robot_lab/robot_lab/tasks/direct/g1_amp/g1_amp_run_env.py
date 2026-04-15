@@ -156,6 +156,10 @@ class G1AmpRunEnv(G1AmpEnv):
                 + (self.cfg.command_vel_low_cutoff - self.cfg.command_vel_min) * torch.rand(n_low, device=self.device)
             )
 
+        # 15% exact zero velocity for standing training
+        zero_mask = torch.rand(n, device=self.device) < 0.15
+        vel[zero_mask] = 0.0
+
         self.velocity_commands[env_ids] = vel
         self.command_time_left[env_ids] = (
             self.cfg.command_duration_min
@@ -280,23 +284,30 @@ class G1AmpRunEnv(G1AmpEnv):
         )
         self.previous_actions = self.actions.clone()
 
-        # ================= heading penalty (Plan C) ===================
-        # Penalize deviation from initial facing direction
+        # ================= heading penalty ===================
+        # Penalize facing direction deviation from INITIAL heading (recorded at reset)
+        # Robot maintains whatever direction it started facing — works for any direction
+        # This is PERSISTENT: if robot drifts 20° at t=5s, it gets penalized every step
         forward_ref = torch.zeros(self.num_envs, 3, device=self.device)
         forward_ref[:, 0] = 1.0
         heading_vec = quat_apply(root_quat_w, forward_ref)  # current facing direction
         heading_xy = heading_vec[:, :2]  # project to XY plane
-        # Dot product with initial heading (1.0 = aligned, 0 = 90° off)
         heading_dot = (heading_xy * self.initial_heading_vec).sum(dim=-1)
-        rew_heading = self.cfg.rew_heading * (1.0 - heading_dot)  # 0 when aligned, negative when deviated
+        heading_dot = torch.clamp(heading_dot, -1.0, 1.0)
+        heading_angle = torch.acos(heading_dot)
+        rew_heading = self.cfg.rew_heading * heading_angle * heading_angle
 
-        # ================= standing joint penalty (Plan D) ============
-        # Penalize joint velocity when ACTUAL speed is low (smooth standing)
-        # Use actual forward velocity, not cmd — avoids harsh penalty during deceleration
+        # ================= standing penalties (only when speed < 1 m/s) ============
         actual_speed = torch.abs(forward_vel)
         low_speed_scale = torch.clamp(1.0 - actual_speed, 0.0, 1.0)  # 1.0 when stopped, 0.0 when v>=1
+
+        # 1) Joint velocity → penalize jittering/wobbling during standing
         joint_vel_sq = torch.sum(torch.square(self.robot.data.joint_vel), dim=-1)
         rew_standing_still = self.cfg.rew_standing_still * low_speed_scale * joint_vel_sq
+
+        # 2) Standing height → penalize squatting during standing (h < 0.75)
+        squat_error = torch.clamp(self.cfg.target_base_height - pelvis_height, min=0.0)
+        rew_standing_height = self.cfg.rew_standing_height * low_speed_scale * squat_error * squat_error
 
         # ================= basic penalties ============================
         basic_reward, basic_reward_log = compute_rewards(
@@ -323,6 +334,7 @@ class G1AmpRunEnv(G1AmpEnv):
             + rew_action_rate
             + rew_heading
             + rew_standing_still
+            + rew_standing_height
             + basic_reward
         )
 
@@ -338,6 +350,7 @@ class G1AmpRunEnv(G1AmpEnv):
             "rew_action_rate": rew_action_rate.mean().item(),
             "rew_heading": rew_heading.mean().item(),
             "rew_standing_still": rew_standing_still.mean().item(),
+            "rew_standing_height": rew_standing_height.mean().item(),
             "heading_dot": heading_dot.mean().item(),
             "total_reward": total_reward.mean().item(),
         }

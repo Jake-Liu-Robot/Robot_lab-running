@@ -69,8 +69,9 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     rew_lateral_vel: float = -0.5   # penalize sideways drift
     rew_yaw_rate: float = -0.5      # penalize spinning (reverted, -1.0 broke gait)
     rew_action_rate: float = -0.1   # penalize jerky actions, increased for smoother standing
-    rew_heading: float = -0.5       # penalize deviation from initial heading direction (was -0.3)
-    rew_standing_still: float = -0.01  # penalize joint velocity when actual speed < 1 (was -0.005)
+    rew_heading: float = -2.0       # angle-squared penalty, 8x stronger (was -0.5, too weak for direction keeping)
+    rew_standing_still: float = -0.05  # 5x stronger, penalize joint velocity when actual speed < 1 (was -0.01)
+    rew_standing_height: float = -10.0  # penalize squatting (low pelvis height) only when standing
 
     # --- disable env-side imitation (discriminator handles style) ---
     rew_imitation_pos = 0.0
