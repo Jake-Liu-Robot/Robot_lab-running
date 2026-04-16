@@ -60,9 +60,10 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     command_prob_high_final: float = 0.45   # 45% sprint
     command_prob_mid_final: float = 0.30    # 30% jog
     # P(low) = 25% standing/start
-    # Adaptive curriculum (based on EMA of episode_length / max_episode_length)
-    curriculum_advance_threshold: float = 0.4   # advance when EMA > 40% (480 steps = 8s)
-    curriculum_retreat_threshold: float = 0.15   # retreat when EMA < 15% (180 steps = 3s)
+    # Adaptive curriculum (based on EMA of normalized velocity tracking reward)
+    # metric = mean(exp(-4*(v_wx - cmd)²)), range [0, 1], 1.0 = perfect tracking
+    curriculum_advance_threshold: float = 0.5   # advance when tracking > 50%
+    curriculum_retreat_threshold: float = 0.2    # retreat when tracking < 20%
     curriculum_step_size: float = 0.05           # level change per trigger
     curriculum_cooldown_steps: int = 20000       # resample calls (~1200 sim steps ≈ 1 full episode)
     command_duration_min: float = 3.0  # seconds
