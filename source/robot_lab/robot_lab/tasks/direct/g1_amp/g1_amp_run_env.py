@@ -123,18 +123,24 @@ class G1AmpRunEnv(G1AmpEnv):
     # ------------------------------------------------------------------ #
 
     def _resample_commands(self, env_ids: torch.Tensor):
-        """Sample new velocity commands from biased speed bands.
+        """Sample new velocity commands with curriculum-based speed bands.
 
-        Three bands with configurable probabilities:
-          high [high_cutoff, vel_max]  — 50% (sprint practice)
-          mid  [low_cutoff, high_cutoff] — 30% (jogging)
-          low  [vel_min, low_cutoff]   — 20% (standing/start)
+        Three bands: high [3,4], mid [1,3], low [0,1] m/s.
+        Probabilities linearly ramp from start→final over curriculum_steps.
         """
         n = len(env_ids)
+        # Curriculum: interpolate probabilities based on training progress
+        progress = min(self.common_step_counter / max(self.cfg.command_curriculum_steps, 1), 1.0)
+        prob_high = self.cfg.command_prob_high_start + progress * (
+            self.cfg.command_prob_high_final - self.cfg.command_prob_high_start
+        )
+        prob_mid = self.cfg.command_prob_mid_start + progress * (
+            self.cfg.command_prob_mid_final - self.cfg.command_prob_mid_start
+        )
         # Band selection
         roll = torch.rand(n, device=self.device)
-        high_mask = roll < self.cfg.command_prob_high
-        mid_mask = (~high_mask) & (roll < self.cfg.command_prob_high + self.cfg.command_prob_mid)
+        high_mask = roll < prob_high
+        mid_mask = (~high_mask) & (roll < prob_high + prob_mid)
         low_mask = ~(high_mask | mid_mask)
 
         vel = torch.zeros(n, device=self.device)
@@ -370,6 +376,8 @@ class G1AmpRunEnv(G1AmpEnv):
             "rew_heading_stand": rew_heading_stand.mean().item(),
             "heading_cos": heading_cos.mean().item(),
             "pelvis_height": pelvis_height.mean().item(),
+            "curriculum_prob_high": min(self.common_step_counter / max(self.cfg.command_curriculum_steps, 1), 1.0)
+                * (self.cfg.command_prob_high_final - self.cfg.command_prob_high_start) + self.cfg.command_prob_high_start,
             "total_reward": total_reward.mean().item(),
         }
         for key, value in basic_reward_log.items():

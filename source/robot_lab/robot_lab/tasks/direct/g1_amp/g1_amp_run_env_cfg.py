@@ -45,17 +45,22 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     # AMP obs remains 105 (inherited): discriminator sees motion features only,
     # no velocity command → won't penalize speed generalization
 
-    # --- velocity command (conservative start) ---
+    # --- velocity command with curriculum ---
     # Three speed bands: low [0, 1), mid [1, 3), high [3, 4] m/s
-    # Start conservative — robot must learn to stand/walk before sprinting
-    # Increase prob_high later once forward_vel shows tracking ability
+    # Curriculum: start conservative, linearly ramp to final distribution
     command_vel_min: float = 0.0
     command_vel_max: float = 4.0
     command_vel_low_cutoff: float = 1.0   # boundary between low/mid bands
     command_vel_high_cutoff: float = 3.0  # boundary between mid/high bands
-    command_prob_high: float = 0.25        # P(high band [3, 4]) — conservative for world-X tracking
-    command_prob_mid: float = 0.35        # P(mid band [1, 3]) — jogging
-    # P(low band [0, 1]) = 1 - high - mid = 0.4 — standing/start
+    # Start distribution (step 0)
+    command_prob_high_start: float = 0.15   # 15% sprint
+    command_prob_mid_start: float = 0.35    # 35% jog
+    # P(low) = 50% standing/start
+    # Final distribution (after curriculum_steps)
+    command_prob_high_final: float = 0.45   # 45% sprint
+    command_prob_mid_final: float = 0.30    # 30% jog
+    # P(low) = 25% standing/start
+    command_curriculum_steps: int = 20000   # linear ramp over this many steps
     command_duration_min: float = 3.0  # seconds
     command_duration_max: float = 7.0  # seconds
 
