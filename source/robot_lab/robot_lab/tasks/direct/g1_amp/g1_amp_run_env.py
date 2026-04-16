@@ -208,7 +208,7 @@ class G1AmpRunEnv(G1AmpEnv):
 
     def _get_observations(self) -> dict:
         # --- AMP obs (105-dim, identical to base class) ---
-        progress = (self.episode_length_buf.squeeze(-1).float() / (self.max_episode_length - 1)).unsqueeze(-1)
+        progress = (self.episode_length_buf.float() / (self.max_episode_length - 1)).view(-1, 1)
         root_pos_relative = self.robot.data.body_pos_w[:, self.ref_body_index] - self.scene.env_origins
         key_body_pos_relative = (
             self.robot.data.body_pos_w[:, self.key_body_indexes] - self.scene.env_origins.unsqueeze(1)
