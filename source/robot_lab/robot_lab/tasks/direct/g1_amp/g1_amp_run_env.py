@@ -317,8 +317,9 @@ class G1AmpRunEnv(G1AmpEnv):
         # 6) lateral velocity (body frame) — prevent crab-walking
         rew_lateral_vel = self.cfg.rew_lateral_vel_run * run_scale * torch.square(lateral_vel_body)
 
-        # 7) base height during running — penalize squatting while running
-        rew_base_height_run = self.cfg.rew_base_height_run * run_scale * torch.square(
+        # 7) base height — penalize squatting at ALL speeds (removed run_scale gating
+        #    to prevent policy from crouching during sub-1m/s acceleration phase)
+        rew_base_height_run = self.cfg.rew_base_height_run * torch.square(
             pelvis_height - self.cfg.target_base_height
         )
 
