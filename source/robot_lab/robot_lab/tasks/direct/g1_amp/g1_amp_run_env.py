@@ -272,10 +272,10 @@ class G1AmpRunEnv(G1AmpEnv):
         up_ref[:, 2] = 1.0
         up_vec = quat_apply(root_quat_w, up_ref)
 
-        # speed-dependent scales
-        speed = torch.abs(forward_vel)
-        stand_scale = torch.clamp(1.0 - speed, 0.0, 1.0)   # 1 @ v=0, 0 @ v≥1
-        run_scale = torch.clamp(speed - 1.0, 0.0, 1.0)      # 0 @ v≤1, 1 @ v≥2
+        # command-dependent scales (gate by cmd_vel, not actual speed, so standing
+        # penalties activate when commanded to stop — even if policy still moving)
+        stand_scale = torch.clamp(1.0 - cmd_vel, 0.0, 1.0)   # 1 @ cmd=0, 0 @ cmd≥1
+        run_scale = torch.clamp(cmd_vel - 1.0, 0.0, 1.0)      # 0 @ cmd≤1, 1 @ cmd≥2
 
         # ================= SHARED rewards (always active) =================
 
