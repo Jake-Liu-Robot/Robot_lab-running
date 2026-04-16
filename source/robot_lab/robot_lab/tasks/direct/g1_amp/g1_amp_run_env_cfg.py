@@ -82,10 +82,10 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     rew_base_height_run: float = -3.0       # penalize squatting while running
 
     # --- standing rewards (scaled by stand_scale, active when speed < 1 m/s) ---
-    rew_standing_height: float = -10.0      # must stand tall (strong, was disabled)
-    rew_standing_still: float = -0.05       # no joint jitter (5x previous)
-    rew_yaw_rate_stand: float = -1.0        # no spinning in place
-    rew_heading_stand: float = -1.0         # face +X when stopped
+    rew_standing_height: float = -2.0       # penalize squatting (gentle start, was -10 causing collapse)
+    rew_standing_still: float = -0.01       # no joint jitter (gentle)
+    rew_yaw_rate_stand: float = -0.3        # no spinning in place (gentle)
+    rew_heading_stand: float = -0.5         # face +X when stopped
 
     # --- disable env-side imitation (discriminator handles style) ---
     rew_imitation_pos = 0.0
