@@ -870,10 +870,14 @@ Run 6 (修数据):
   10K → episode=989, disc_loss=2.20
   Eval: 方向偏转明显改善，站立仍半蹲（预期内）
 
-加站立数据阶段 (进行中):
+加站立数据阶段 (暂停于 10K 步):
   从矫直数据的 10K checkpoint 续训
   数据: g1_run_and_stand.npz (73% 跑步 + 27% 站立)
-  待监控...
+  5K  → episode=822, reward=-9.5, disc_loss=2.095
+  10K → episode=1010, reward=+64, disc_loss=2.094
+  → episode 突破 1000（超过 Run 4b 的 989 天花板）✅
+  → disc_loss 稳定在 2.09 ✅
+  → 站立数据效果待 eval 验证
 ```
 
 ---
