@@ -66,7 +66,7 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     target_base_height: float = 0.75        # G1 pelvis standing height
 
     # --- running rewards (scaled by run_scale, active when speed > 1 m/s) ---
-    rew_heading_run: float = -1.0           # face world +X, small-angle correction
+    rew_heading_run: float = -3.0           # face world +X, strengthened -1.0→-3.0 to fix locked 8° yaw bias
     rew_lateral_vel_run: float = -0.5       # body-frame crab-walking
     rew_base_height_run: float = -10.0      # penalize squatting while running
 
