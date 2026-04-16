@@ -60,19 +60,23 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     command_duration_max: float = 7.0  # seconds
 
     # --- velocity tracking reward ---
-    rew_velocity_tracking: float = 1.5
+    rew_velocity_tracking: float = 1.5      # exp(-4·(v_wx - cmd)²), world X
 
-    # --- regularization rewards ---
-    rew_upright: float = 1.0        # keep pelvis upright, strong penalty for tilt during standing
-    rew_base_height: float = -3.0   # penalize deviation from target height (was -2.0, h=0.674 only -0.012)
-    target_base_height: float = 0.75  # G1 pelvis height during running (~m)
-    rew_lateral_vel: float = -0.5   # penalize sideways drift
-    rew_yaw_rate: float = -0.5      # penalize spinning (reverted, -1.0 broke gait)
-    rew_action_rate: float = -0.1   # penalize jerky actions, increased for smoother standing
-    rew_heading: float = -0.75      # 1.5x original, same formula (was -0.5)
-    rew_standing_still: float = -0.01  # keep original
-    rew_standing_height: float = 0.0   # disabled for Round 1
-    rew_gait_phase: float = 0.0    # disabled for Round 1
+    # --- shared rewards (always active) ---
+    rew_upright: float = 1.0                # body +Z projected to world +Z
+    rew_action_rate: float = -0.1           # smooth actions
+    target_base_height: float = 0.75        # G1 pelvis standing height
+
+    # --- running rewards (scaled by run_scale, active when speed > 1 m/s) ---
+    rew_heading_run: float = -1.0           # face world +X, small-angle correction
+    rew_lateral_vel_run: float = -0.5       # body-frame crab-walking
+    rew_base_height_run: float = -3.0       # penalize squatting while running
+
+    # --- standing rewards (scaled by stand_scale, active when speed < 1 m/s) ---
+    rew_standing_height: float = -10.0      # must stand tall (strong, was disabled)
+    rew_standing_still: float = -0.05       # no joint jitter (5x previous)
+    rew_yaw_rate_stand: float = -1.0        # no spinning in place
+    rew_heading_stand: float = -1.0         # face +X when stopped
 
     # --- disable env-side imitation (discriminator handles style) ---
     rew_imitation_pos = 0.0

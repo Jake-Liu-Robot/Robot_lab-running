@@ -209,11 +209,9 @@ def main(env_cfg: DirectRLEnvCfg, experiment_cfg: dict):
         lat_vel = 0.0
         pelvis_h = 0.0
         if hasattr(raw_env, 'robot'):
-            root_quat = raw_env.robot.data.body_quat_w[0, raw_env.ref_body_index]
             root_vel_w = raw_env.robot.data.body_lin_vel_w[0, raw_env.ref_body_index]
-            vel_body = quat_rotate_inverse(root_quat.unsqueeze(0), root_vel_w.unsqueeze(0)).squeeze(0)
-            fwd_vel = vel_body[0].item()
-            lat_vel = vel_body[1].item()
+            fwd_vel = root_vel_w[0].item()   # world X
+            lat_vel = root_vel_w[1].item()    # world Y
             pelvis_h = raw_env.robot.data.body_pos_w[0, raw_env.ref_body_index, 2].item()
 
         cmd = raw_env.velocity_commands[0].item() if hasattr(raw_env, 'velocity_commands') else 0

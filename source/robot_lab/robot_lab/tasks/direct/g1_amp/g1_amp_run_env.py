@@ -250,81 +250,51 @@ class G1AmpRunEnv(G1AmpEnv):
     # ------------------------------------------------------------------ #
 
     def _get_rewards(self) -> torch.Tensor:
-        # ================= velocity tracking ==========================
+        # ================= common quantities ==============================
         root_quat_w = self.robot.data.body_quat_w[:, self.ref_body_index]
         root_vel_w = self.robot.data.body_lin_vel_w[:, self.ref_body_index]
+        root_ang_vel_w = self.robot.data.body_ang_vel_w[:, self.ref_body_index]
         root_vel_b = quat_rotate_inverse(root_quat_w, root_vel_w)
-        forward_vel = root_vel_b[:, 0]
-        lateral_vel = root_vel_b[:, 1]
-
+        pelvis_height = self.robot.data.body_pos_w[:, self.ref_body_index, 2]
         cmd_vel = self.velocity_commands
+
+        forward_vel = root_vel_w[:, 0]       # world X velocity
+        lateral_vel_body = root_vel_b[:, 1]   # body Y velocity (crab-walking)
+        yaw_rate = root_ang_vel_w[:, 2]       # world Z angular velocity
+
+        # heading: body +X projected to world +X = cos(yaw)
+        forward_ref = torch.zeros(self.num_envs, 3, device=self.device)
+        forward_ref[:, 0] = 1.0
+        heading_vec = quat_apply(root_quat_w, forward_ref)
+        heading_cos = heading_vec[:, 0]       # 1.0 = facing +X, 0.0 = 90° off
+
+        # upright: body +Z projected to world +Z
+        up_ref = torch.zeros(self.num_envs, 3, device=self.device)
+        up_ref[:, 2] = 1.0
+        up_vec = quat_apply(root_quat_w, up_ref)
+
+        # speed-dependent scales
+        speed = torch.abs(forward_vel)
+        stand_scale = torch.clamp(1.0 - speed, 0.0, 1.0)   # 1 @ v=0, 0 @ v≥1
+        run_scale = torch.clamp(speed - 1.0, 0.0, 1.0)      # 0 @ v≤1, 1 @ v≥2
+
+        # ================= SHARED rewards (always active) =================
+
+        # 1) velocity tracking (world X) — primary objective
         rew_velocity = self.cfg.rew_velocity_tracking * torch.exp(
             -4.0 * torch.square(forward_vel - cmd_vel)
         )
 
-        # ================= upright reward =============================
-        up_ref = torch.zeros(self.num_envs, 3, device=self.device)
-        up_ref[:, 2] = 1.0
-        up_vec = quat_apply(root_quat_w, up_ref)
+        # 2) upright — always keep pelvis vertical
         rew_upright = self.cfg.rew_upright * up_vec[:, 2]
 
-        # ================= base height penalty ========================
-        pelvis_height = self.robot.data.body_pos_w[:, self.ref_body_index, 2]
-        rew_base_height = self.cfg.rew_base_height * torch.square(
-            pelvis_height - self.cfg.target_base_height
-        )
-
-        # ================= lateral velocity penalty ===================
-        rew_lateral_vel = self.cfg.rew_lateral_vel * torch.square(lateral_vel)
-
-        # ================= yaw rate penalty ===========================
-        root_ang_vel_w = self.robot.data.body_ang_vel_w[:, self.ref_body_index]
-        yaw_rate = root_ang_vel_w[:, 2]
-        rew_yaw_rate = self.cfg.rew_yaw_rate * torch.square(yaw_rate)
-
-        # ================= action rate penalty ========================
+        # 3) action rate — smooth actions (always, but running naturally has larger values)
         rew_action_rate = self.cfg.rew_action_rate * torch.sum(
             torch.square(self.actions - self.previous_actions), dim=-1
         )
         self.previous_actions = self.actions.clone()
 
-        # ================= heading penalty ===================
-        # Penalize facing direction deviation from INITIAL heading (recorded at reset)
-        # Robot maintains whatever direction it started facing — works for any direction
-        # This is PERSISTENT: if robot drifts 20° at t=5s, it gets penalized every step
-        forward_ref = torch.zeros(self.num_envs, 3, device=self.device)
-        forward_ref[:, 0] = 1.0
-        heading_vec = quat_apply(root_quat_w, forward_ref)  # current facing direction
-        heading_xy = heading_vec[:, :2]  # project to XY plane
-        heading_dot = (heading_xy * self.initial_heading_vec).sum(dim=-1)
-        rew_heading = self.cfg.rew_heading * (1.0 - heading_dot)
-
-        # ================= standing penalties (only when speed < 1 m/s) ============
-        actual_speed = torch.abs(forward_vel)
-        low_speed_scale = torch.clamp(1.0 - actual_speed, 0.0, 1.0)  # 1.0 when stopped, 0.0 when v>=1
-
-        # 1) Joint velocity → penalize jittering/wobbling during standing
-        joint_vel_sq = torch.sum(torch.square(self.robot.data.joint_vel), dim=-1)
-        rew_standing_still = self.cfg.rew_standing_still * low_speed_scale * joint_vel_sq
-
-        # 2) Standing height → penalize squatting during standing (h < 0.75)
-        squat_error = torch.clamp(self.cfg.target_base_height - pelvis_height, min=0.0)
-        rew_standing_height = self.cfg.rew_standing_height * low_speed_scale * squat_error * squat_error
-
-        # ================= gait phase (running only) ==================
-        # Penalize double stance during running → encourage flight phase
-        # Running = both feet off ground at some point; walking = always one foot on ground
-        left_foot_z = self.robot.data.body_pos_w[:, self.left_foot_idx, 2]
-        right_foot_z = self.robot.data.body_pos_w[:, self.right_foot_idx, 2]
-        contact_threshold = 0.05
-        left_contact = (left_foot_z < contact_threshold).float()
-        right_contact = (right_foot_z < contact_threshold).float()
-        # Only active when running (speed > 1.5 m/s)
-        run_scale = torch.clamp(actual_speed - 1.5, 0.0, 1.0)
-        double_stance = left_contact * right_contact
-        rew_gait_phase = self.cfg.rew_gait_phase * run_scale * double_stance
-
-        # ================= basic penalties ============================
+        # 4) basic penalties — joint limits, action L2, etc (always)
         basic_reward, basic_reward_log = compute_rewards(
             self.cfg.rew_termination,
             self.cfg.rew_action_l2,
@@ -339,19 +309,49 @@ class G1AmpRunEnv(G1AmpEnv):
             self.robot.data.joint_vel,
         )
 
+        # ================= RUNNING rewards (scale with run_scale) =========
+
+        # 5) heading — face world +X (small-angle correction signal)
+        #    Provides gradient where velocity_tracking is flat (cos(θ) ≈ 1 for small θ)
+        rew_heading = self.cfg.rew_heading_run * run_scale * (1.0 - heading_cos)
+
+        # 6) lateral velocity (body frame) — prevent crab-walking
+        rew_lateral_vel = self.cfg.rew_lateral_vel_run * run_scale * torch.square(lateral_vel_body)
+
+        # 7) base height during running — penalize squatting while running
+        rew_base_height_run = self.cfg.rew_base_height_run * run_scale * torch.square(
+            pelvis_height - self.cfg.target_base_height
+        )
+
+        # ================= STANDING rewards (scale with stand_scale) ======
+
+        # 8) standing height — must stand tall (h ≥ target)
+        squat_error = torch.clamp(self.cfg.target_base_height - pelvis_height, min=0.0)
+        rew_standing_height = self.cfg.rew_standing_height * stand_scale * torch.square(squat_error)
+
+        # 9) standing still — no joint jitter
+        joint_vel_sq = torch.sum(torch.square(self.robot.data.joint_vel), dim=-1)
+        rew_standing_still = self.cfg.rew_standing_still * stand_scale * joint_vel_sq
+
+        # 10) standing yaw rate — no spinning in place
+        rew_yaw_rate_stand = self.cfg.rew_yaw_rate_stand * stand_scale * torch.square(yaw_rate)
+
+        # 11) standing heading — face +X when stopped
+        rew_heading_stand = self.cfg.rew_heading_stand * stand_scale * (1.0 - heading_cos)
+
         # ================= total env reward ===========================
         total_reward = (
             rew_velocity
             + rew_upright
-            + rew_base_height
-            + rew_lateral_vel
-            + rew_yaw_rate
             + rew_action_rate
-            + rew_heading
-            + rew_standing_still
-            + rew_standing_height
-            + rew_gait_phase
             + basic_reward
+            + rew_heading
+            + rew_lateral_vel
+            + rew_base_height_run
+            + rew_standing_height
+            + rew_standing_still
+            + rew_yaw_rate_stand
+            + rew_heading_stand
         )
 
         # ================= logging ====================================
@@ -360,15 +360,16 @@ class G1AmpRunEnv(G1AmpEnv):
             "forward_vel": forward_vel.mean().item(),
             "cmd_vel": cmd_vel.mean().item(),
             "rew_upright": rew_upright.mean().item(),
-            "rew_base_height": rew_base_height.mean().item(),
-            "rew_lateral_vel": rew_lateral_vel.mean().item(),
-            "rew_yaw_rate": rew_yaw_rate.mean().item(),
             "rew_action_rate": rew_action_rate.mean().item(),
-            "rew_heading": rew_heading.mean().item(),
-            "rew_standing_still": rew_standing_still.mean().item(),
+            "rew_heading_run": rew_heading.mean().item(),
+            "rew_lateral_vel_run": rew_lateral_vel.mean().item(),
+            "rew_base_height_run": rew_base_height_run.mean().item(),
             "rew_standing_height": rew_standing_height.mean().item(),
-            "rew_gait_phase": rew_gait_phase.mean().item(),
-            "heading_dot": heading_dot.mean().item(),
+            "rew_standing_still": rew_standing_still.mean().item(),
+            "rew_yaw_rate_stand": rew_yaw_rate_stand.mean().item(),
+            "rew_heading_stand": rew_heading_stand.mean().item(),
+            "heading_cos": heading_cos.mean().item(),
+            "pelvis_height": pelvis_height.mean().item(),
             "total_reward": total_reward.mean().item(),
         }
         for key, value in basic_reward_log.items():
