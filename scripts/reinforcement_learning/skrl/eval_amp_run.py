@@ -132,7 +132,7 @@ def main(env_cfg: DirectRLEnvCfg, experiment_cfg: dict):
         "step_trigger": lambda step: step == 0,
         "video_length": args_cli.video_length,
         "disable_logger": True,
-        "name_prefix": f"eval_{cmd_vel_mode}",
+        "name_prefix": f"eval_{ckpt_name}_{cmd_vel_mode}",
     }
     env = gym.wrappers.RecordVideo(env, **video_kwargs)
 
