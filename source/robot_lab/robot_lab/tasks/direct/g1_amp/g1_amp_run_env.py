@@ -404,13 +404,17 @@ class G1AmpRunEnv(G1AmpEnv):
 
         self.extras["log"] = log_dict
 
-        if hasattr(self, "_skrl_agent") and getattr(self, "_skrl_agent", None) is not None:
-            try:
-                agent = self._skrl_agent
-                for k, v in log_dict.items():
-                    agent.track_data(f"Reward / {k}", v)
-            except Exception:
-                pass
+        # Print curriculum status every 1000 steps
+        if self.common_step_counter % 1000 == 0:
+            print(f"[STEP {self.common_step_counter}] "
+                  f"cur_lvl={self.curriculum_level:.2f} "
+                  f"ema={self._curriculum_ep_ema:.3f} "
+                  f"ep={self.episode_length_buf.float().mean().item():.0f} "
+                  f"fwd={forward_vel.mean().item():.2f} "
+                  f"cmd={cmd_vel.mean().item():.2f} "
+                  f"h={pelvis_height.mean().item():.3f} "
+                  f"head={heading_cos.mean().item():.3f} "
+                  f"rew={total_reward.mean().item():.2f}")
 
         return total_reward
 
