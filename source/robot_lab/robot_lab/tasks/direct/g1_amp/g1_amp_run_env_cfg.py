@@ -67,7 +67,7 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
 
     # --- running rewards (scaled by run_scale, active when speed > 1 m/s) ---
     rew_heading_run: float = -5.0           # face world +X, -3→-5 to suppress running yaw oscillation (±5.8° vs ref ±2°)
-    rew_lateral_vel_run: float = -0.5       # body-frame crab-walking
+    rew_lateral_vel_run: float = -0.5       # body-frame crab-walking (kept at -0.5 to avoid double-penalizing yaw oscillation with heading)
     rew_base_height_run: float = -10.0      # penalize squatting while running
 
     # --- standing rewards (scaled by stand_scale, active when speed < 1 m/s) ---
