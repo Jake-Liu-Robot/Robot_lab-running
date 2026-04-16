@@ -33,7 +33,7 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     """
 
     # --- motion data ---
-    motion_file = os.path.join(MOTIONS_DIR, "g1_run2_subject1_30_straight_mirror.npz")
+    motion_file = os.path.join(MOTIONS_DIR, "g1_run_and_stand.npz")
     motion_speed: float = 1.0  # 1.0 = natural speed; increase if discriminator blocks high-speed running
 
     # --- episode ---
