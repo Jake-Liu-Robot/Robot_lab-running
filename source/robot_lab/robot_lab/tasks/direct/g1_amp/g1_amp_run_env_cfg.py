@@ -51,9 +51,9 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     command_vel_max: float = 4.0
     command_vel_low_cutoff: float = 1.0   # boundary between low/mid bands
     command_vel_high_cutoff: float = 3.0  # boundary between mid/high bands
-    command_prob_high: float = 0.30       # 30% sprint [3,4]
-    command_prob_mid: float = 0.35        # 35% jog [1,3]
-    # P(low) = 35% standing/start [0,1]
+    command_prob_high: float = 0.60       # 60% sprint [3,4] (Route 3: focus on high-speed mastery)
+    command_prob_mid: float = 0.30        # 30% jog [1,3]
+    # P(low) = 10% standing/start [0,1]
     command_duration_min: float = 3.0  # seconds
     command_duration_max: float = 7.0  # seconds
 
@@ -66,7 +66,7 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     target_base_height: float = 0.75        # G1 pelvis standing height
 
     # --- running rewards (scaled by run_scale, active when speed > 1 m/s) ---
-    rew_heading_run: float = -3.0           # face world +X, strengthened -1.0→-3.0 to fix locked 8° yaw bias
+    rew_heading_run: float = -5.0           # face world +X, -3.0→-5.0 (Route 3: break yaw plateau)
     rew_lateral_vel_run: float = -0.5       # body-frame crab-walking
     rew_base_height_run: float = -10.0      # penalize squatting while running
 
