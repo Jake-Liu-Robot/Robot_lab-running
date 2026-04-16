@@ -1,143 +1,143 @@
 """
 Generate clean standing data for AMP discriminator.
 
-Two modes:
-1. --from-npz: Extract the quietest frame from an existing NPZ and replicate it
-   with zero velocities. Body positions are FK-correct (from actual motion data).
-   This is the RECOMMENDED mode.
+Uses Pinocchio FK to compute exact body positions for G1 default pose
+(all joints = 0). Replicates this single frame for 5 seconds with zero velocities.
 
-2. Default: Generate synthetic standing with all joints=0 and approximate body
-   positions. Less accurate but doesn't need existing data.
+MUST run on RunPod (requires Pinocchio + G1 URDF).
 
-USAGE (recommended):
-    python generate_standing.py --from-npz g1_run2_subject1_30_straight_mirror.npz
+USAGE:
+    /isaac-sim/python.sh generate_standing.py
 
-    # Output: g1_standing_5s.npz (same directory)
+Output: g1_standing_5s.npz (same directory)
 """
 
-import argparse
 import os
 
 import numpy as np
 
-
-def find_quietest_frame(data):
-    """Find the frame with minimum joint velocity (most standing-like)."""
-    dof_vel = data["dof_velocities"]  # (T, 29)
-    # RMS of joint velocities per frame
-    vel_rms = np.sqrt(np.mean(dof_vel ** 2, axis=1))
-    best_idx = np.argmin(vel_rms)
-    print(f"  Quietest frame: {best_idx} (vel_rms={vel_rms[best_idx]:.4f})")
-    print(f"  Joint pos range: [{data['dof_positions'][best_idx].min():.3f}, {data['dof_positions'][best_idx].max():.3f}]")
-    print(f"  Height: {data['body_positions'][best_idx, 0, 2]:.3f}m")
-    return best_idx
-
-
-def generate_from_npz(npz_path, output_path, duration_s=5.0, fps=30):
-    """Extract quietest frame from existing NPZ and replicate with zero velocities."""
-    data = dict(np.load(npz_path, allow_pickle=True))
-    print(f"Source: {npz_path} ({data['dof_positions'].shape[0]} frames)")
-
-    best_idx = find_quietest_frame(data)
-    N = int(duration_s * fps) + 1
-
-    result = {}
-    # Replicate the single frame N times
-    for key in ["dof_positions", "body_positions", "body_rotations"]:
-        frame = data[key][best_idx:best_idx + 1]  # (1, ...)
-        result[key] = np.tile(frame, (N,) + (1,) * (frame.ndim - 1)).astype(np.float32)
-
-    # Set all velocities to zero (perfectly still standing)
-    result["dof_velocities"] = np.zeros((N, data["dof_positions"].shape[1]), dtype=np.float32)
-    result["body_linear_velocities"] = np.zeros((N,) + data["body_positions"].shape[1:], dtype=np.float32)
-    result["body_angular_velocities"] = np.zeros((N,) + data["body_positions"].shape[1:], dtype=np.float32)
-
-    result["dof_names"] = data["dof_names"]
-    result["body_names"] = data["body_names"]
-    result["fps"] = data["fps"]
-
-    np.savez(output_path, **result)
-    print(f"\nGenerated: {output_path}")
-    print(f"  Frames: {N}, Duration: {duration_s}s")
-    print(f"  Body positions: from FK (frame {best_idx})")
-    print(f"  All velocities: zero")
+try:
+    import pinocchio as pin
+    from pinocchio.robot_wrapper import RobotWrapper
+except ImportError:
+    try:
+        import pinocchio as pin
+        RobotWrapper = pin.RobotWrapper
+    except ImportError:
+        print("ERROR: Pinocchio not found. Run: pip install pin")
+        exit(1)
 
 
-def generate_synthetic(output_path, duration_s=5.0, fps=30):
-    """Generate synthetic standing with approximate body positions."""
-    N = int(duration_s * fps) + 1
-    num_dofs = 29
-    num_bodies = 14
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(SCRIPT_DIR, "..", "..", "..", "..", "..", "..", ".."))
 
-    dof_names = [
-        "left_hip_pitch_joint", "left_hip_roll_joint", "left_hip_yaw_joint",
-        "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
-        "right_hip_pitch_joint", "right_hip_roll_joint", "right_hip_yaw_joint",
-        "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint",
-        "waist_yaw_joint", "waist_roll_joint", "waist_pitch_joint",
-        "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint",
-        "left_elbow_joint", "left_wrist_roll_joint", "left_wrist_pitch_joint", "left_wrist_yaw_joint",
-        "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
-        "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
-    ]
-    body_names = [
-        "pelvis", "left_shoulder_yaw_link", "right_shoulder_yaw_link",
-        "left_elbow_link", "right_elbow_link", "right_rubber_hand", "left_rubber_hand",
-        "right_ankle_roll_link", "left_ankle_roll_link", "torso_link",
-        "right_hip_yaw_link", "left_hip_yaw_link", "right_knee_link", "left_knee_link",
-    ]
+# G1 URDF (same as csv2npz_run.py uses)
+DEFAULT_URDF = os.path.join(REPO_ROOT, "source", "robot_lab", "data", "Robots",
+                            "unitree", "g1_description", "urdf", "g1_29dof_rev_1_0.urdf")
+DEFAULT_MESH = os.path.join(REPO_ROOT, "source", "robot_lab", "data", "Robots", "unitree")
 
-    # Approximate body positions (rough estimates from G1 URDF)
-    body_pos = np.zeros((num_bodies, 3), dtype=np.float32)
-    body_pos[0] = [0.0, 0.0, 0.78]
-    body_pos[1] = [0.0, 0.18, 1.05]
-    body_pos[2] = [0.0, -0.18, 1.05]
-    body_pos[3] = [0.0, 0.30, 0.85]
-    body_pos[4] = [0.0, -0.30, 0.85]
-    body_pos[5] = [0.0, -0.40, 0.75]
-    body_pos[6] = [0.0, 0.40, 0.75]
-    body_pos[7] = [0.0, -0.10, 0.04]
-    body_pos[8] = [0.0, 0.10, 0.04]
-    body_pos[9] = [0.0, 0.0, 0.95]
-    body_pos[10] = [0.0, -0.10, 0.68]
-    body_pos[11] = [0.0, 0.10, 0.68]
-    body_pos[12] = [0.0, -0.10, 0.38]
-    body_pos[13] = [0.0, 0.10, 0.38]
+# 14 key bodies for AMP (same order as csv2npz_run.py)
+BODY_NAMES = [
+    "pelvis", "left_shoulder_yaw_link", "right_shoulder_yaw_link",
+    "left_elbow_link", "right_elbow_link", "right_rubber_hand", "left_rubber_hand",
+    "right_ankle_roll_link", "left_ankle_roll_link", "torso_link",
+    "right_hip_yaw_link", "left_hip_yaw_link", "right_knee_link", "left_knee_link",
+]
 
-    result = {
-        "dof_positions": np.zeros((N, num_dofs), dtype=np.float32),
-        "dof_velocities": np.zeros((N, num_dofs), dtype=np.float32),
-        "body_positions": np.tile(body_pos, (N, 1, 1)),
-        "body_rotations": np.zeros((N, num_bodies, 4), dtype=np.float32),
-        "body_linear_velocities": np.zeros((N, num_bodies, 3), dtype=np.float32),
-        "body_angular_velocities": np.zeros((N, num_bodies, 3), dtype=np.float32),
-        "dof_names": np.array(dof_names, dtype=np.str_),
-        "body_names": np.array(body_names, dtype=np.str_),
-        "fps": fps,
-    }
-    result["body_rotations"][:, :, 0] = 1.0  # identity quaternion
+DOF_NAMES = [
+    "left_hip_pitch_joint", "left_hip_roll_joint", "left_hip_yaw_joint",
+    "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
+    "right_hip_pitch_joint", "right_hip_roll_joint", "right_hip_yaw_joint",
+    "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint",
+    "waist_yaw_joint", "waist_roll_joint", "waist_pitch_joint",
+    "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint",
+    "left_elbow_joint", "left_wrist_roll_joint", "left_wrist_pitch_joint", "left_wrist_yaw_joint",
+    "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
+    "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
+]
 
-    np.savez(output_path, **result)
-    print(f"Generated (synthetic): {output_path}")
-    print(f"  Frames: {N}, Duration: {duration_s}s")
-    print(f"  WARNING: Body positions are approximate, not FK-computed")
+
+def pin_rotation_to_quat_wxyz(R):
+    """Convert 3x3 rotation matrix to quaternion (wxyz convention)."""
+    quat_xyzw = pin.Quaternion(R).coeffs()  # pinocchio returns xyzw
+    return np.array([quat_xyzw[3], quat_xyzw[0], quat_xyzw[1], quat_xyzw[2]], dtype=np.float32)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate standing data for AMP")
-    parser.add_argument("--from-npz", type=str, default=None,
-                        help="Extract quietest frame from existing NPZ (recommended)")
-    parser.add_argument("--output", type=str, default=None, help="Output path")
+    import argparse
+    parser = argparse.ArgumentParser(description="Generate standing NPZ using Pinocchio FK")
+    parser.add_argument("--urdf", default=DEFAULT_URDF, help="G1 URDF path")
+    parser.add_argument("--mesh_dir", default=DEFAULT_MESH, help="Mesh directory")
     parser.add_argument("--duration", type=float, default=5.0, help="Duration in seconds")
+    parser.add_argument("--fps", type=int, default=30, help="Frame rate")
+    parser.add_argument("--output", default=None, help="Output path")
     args = parser.parse_args()
 
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    output = args.output or os.path.join(script_dir, "g1_standing_5s.npz")
+    output_path = args.output or os.path.join(SCRIPT_DIR, "g1_standing_5s.npz")
+    N = int(args.duration * args.fps) + 1
+    num_bodies = len(BODY_NAMES)
+    num_dofs = len(DOF_NAMES)
 
-    if args.from_npz:
-        generate_from_npz(args.from_npz, output, args.duration)
-    else:
-        generate_synthetic(output, args.duration)
+    # --- Load robot model ---
+    print(f"Loading URDF: {args.urdf}")
+    robot = RobotWrapper.BuildFromURDF(args.urdf, [args.mesh_dir])
+    model = robot.model
+    data = robot.data
+
+    # --- Compute FK for default pose (all joints = 0) ---
+    q = pin.neutral(model)  # default configuration
+    pin.forwardKinematics(model, data, q)
+    pin.updateFramePlacements(model, data)
+
+    print(f"\nDefault pose FK results:")
+    body_positions = np.zeros((num_bodies, 3), dtype=np.float32)
+    body_rotations = np.zeros((num_bodies, 4), dtype=np.float32)
+
+    for i, body_name in enumerate(BODY_NAMES):
+        frame_id = model.getFrameId(body_name)
+        if frame_id >= len(data.oMf):
+            print(f"  WARNING: body '{body_name}' not found, using zero position")
+            body_rotations[i, 0] = 1.0  # identity quat
+            continue
+
+        placement = data.oMf[frame_id]
+        pos = placement.translation.astype(np.float32)
+        quat = pin_rotation_to_quat_wxyz(placement.rotation)
+
+        body_positions[i] = pos
+        body_rotations[i] = quat
+        print(f"  {body_name:30s}: pos=({pos[0]:+.3f}, {pos[1]:+.3f}, {pos[2]:+.3f})")
+
+    pelvis_h = body_positions[0, 2]
+    print(f"\nPelvis height: {pelvis_h:.3f}m")
+
+    # --- Build NPZ arrays ---
+    dof_positions = np.zeros((N, num_dofs), dtype=np.float32)
+    dof_velocities = np.zeros((N, num_dofs), dtype=np.float32)
+    body_pos_all = np.tile(body_positions, (N, 1, 1))  # (N, 14, 3)
+    body_rot_all = np.tile(body_rotations, (N, 1, 1))  # (N, 14, 4)
+    body_lv = np.zeros((N, num_bodies, 3), dtype=np.float32)
+    body_av = np.zeros((N, num_bodies, 3), dtype=np.float32)
+
+    # --- Save ---
+    np.savez(
+        output_path,
+        dof_positions=dof_positions,
+        dof_velocities=dof_velocities,
+        body_positions=body_pos_all,
+        body_rotations=body_rot_all,
+        body_linear_velocities=body_lv,
+        body_angular_velocities=body_av,
+        dof_names=np.array(DOF_NAMES, dtype=np.str_),
+        body_names=np.array(BODY_NAMES, dtype=np.str_),
+        fps=args.fps,
+    )
+
+    print(f"\nSaved: {output_path}")
+    print(f"  Frames: {N}, Duration: {args.duration}s, FPS: {args.fps}")
+    print(f"  All joints = 0 (URDF default pose)")
+    print(f"  All velocities = 0 (perfectly still)")
+    print(f"  Body positions = FK computed (exact)")
 
 
 if __name__ == "__main__":
