@@ -234,6 +234,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         print(f"[INFO] Loading model checkpoint from: {resume_path}")
         runner.agent.load(resume_path)
 
+    # attach agent to underlying env so env can log per-term rewards to TensorBoard
+    for candidate in [env, getattr(env, "_env", None), getattr(env, "env", None)]:
+        if candidate is None:
+            continue
+        target = getattr(candidate, "unwrapped", candidate)
+        try:
+            target._skrl_agent = runner.agent
+            print(f"[INFO] Attached skrl agent to {type(target).__name__} for per-term TB logging")
+            break
+        except Exception:
+            continue
+
     # run training
     runner.run()
 

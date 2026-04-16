@@ -376,6 +376,15 @@ class G1AmpRunEnv(G1AmpEnv):
 
         self.extras["log"] = log_dict
 
+        # Write per-term rewards to TensorBoard (requires train.py to attach _skrl_agent)
+        if hasattr(self, "_skrl_agent") and getattr(self, "_skrl_agent", None) is not None:
+            try:
+                agent = getattr(self, "_skrl_agent")
+                for k, v in log_dict.items():
+                    agent.track_data(f"Reward / {k}", v)
+            except Exception:
+                pass
+
         # Print curriculum status every 1000 steps
         if self.common_step_counter % 1000 == 0:
             print(f"[STEP {self.common_step_counter}] "
