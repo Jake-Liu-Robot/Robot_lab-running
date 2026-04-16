@@ -68,7 +68,7 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     # --- running rewards (scaled by run_scale, active when speed > 1 m/s) ---
     rew_heading_run: float = -1.0           # face world +X, small-angle correction
     rew_lateral_vel_run: float = -0.5       # body-frame crab-walking
-    rew_base_height_run: float = -3.0       # penalize squatting while running
+    rew_base_height_run: float = -10.0      # penalize squatting while running
 
     # --- standing rewards (scaled by stand_scale, active when speed < 1 m/s) ---
     rew_standing_height: float = -2.0       # penalize squatting (gentle start, was -10 causing collapse)
@@ -103,7 +103,7 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     added_mass_range: float = 2.0      # ±2 kg on torso
 
     # --- termination ---
-    termination_height = 0.25  # lowered from 0.4 to give more learning time
+    termination_height = 0.45  # raised from 0.25 to prevent squat-cheating (current h=0.54, 9cm margin)
 
     # --- reset ---
     reset_strategy = "default"  # start from standing pose; "random" was causing instant falls
