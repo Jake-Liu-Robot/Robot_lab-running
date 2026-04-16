@@ -52,14 +52,14 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     command_vel_max: float = 4.0
     command_vel_low_cutoff: float = 1.0   # boundary between low/mid bands
     command_vel_high_cutoff: float = 3.0  # boundary between mid/high bands
-    # Start distribution (curriculum_level = 0)
-    command_prob_high_start: float = 0.15   # 15% sprint
-    command_prob_mid_start: float = 0.35    # 35% jog
-    # P(low) = 50% standing/start
-    # Final distribution (curriculum_level = 1)
-    command_prob_high_final: float = 0.45   # 45% sprint
+    # Start distribution (curriculum_level = 0): mostly standing
+    command_prob_high_start: float = 0.05   # 5% sprint (keep disc seeing running)
+    command_prob_mid_start: float = 0.15    # 15% jog
+    # P(low) = 80% standing/start
+    # Final distribution (curriculum_level = 1): mostly sprinting
+    command_prob_high_final: float = 0.50   # 50% sprint
     command_prob_mid_final: float = 0.30    # 30% jog
-    # P(low) = 25% standing/start
+    # P(low) = 20% standing/start
     # Adaptive curriculum (based on EMA of episode_length / max_episode_length)
     curriculum_advance_threshold: float = 0.7   # advance when EMA > 70%
     curriculum_retreat_threshold: float = 0.3    # retreat when EMA < 30%
