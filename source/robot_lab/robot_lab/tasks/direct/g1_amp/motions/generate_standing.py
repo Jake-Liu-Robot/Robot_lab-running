@@ -108,8 +108,15 @@ def main():
         body_rotations[i] = quat
         print(f"  {body_name:30s}: pos=({pos[0]:+.3f}, {pos[1]:+.3f}, {pos[2]:+.3f})")
 
+    # Shift all bodies up so feet touch the ground (z=0)
+    # Find the lowest body (ankle) and offset everything
+    min_z = body_positions[:, 2].min()
+    ground_offset = -min_z + 0.02  # small clearance above ground
+    body_positions[:, 2] += ground_offset
+
     pelvis_h = body_positions[0, 2]
-    print(f"\nPelvis height: {pelvis_h:.3f}m")
+    print(f"\n  Ground offset applied: {ground_offset:.3f}m (feet were at z={min_z:.3f})")
+    print(f"  Pelvis height after offset: {pelvis_h:.3f}m")
 
     # --- Build NPZ arrays ---
     dof_positions = np.zeros((N, num_dofs), dtype=np.float32)
