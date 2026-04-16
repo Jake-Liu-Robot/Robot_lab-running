@@ -52,15 +52,18 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     command_vel_max: float = 4.0
     command_vel_low_cutoff: float = 1.0   # boundary between low/mid bands
     command_vel_high_cutoff: float = 3.0  # boundary between mid/high bands
-    # Start distribution (step 0)
+    # Start distribution (curriculum_level = 0)
     command_prob_high_start: float = 0.15   # 15% sprint
     command_prob_mid_start: float = 0.35    # 35% jog
     # P(low) = 50% standing/start
-    # Final distribution (after curriculum_steps)
+    # Final distribution (curriculum_level = 1)
     command_prob_high_final: float = 0.45   # 45% sprint
     command_prob_mid_final: float = 0.30    # 30% jog
     # P(low) = 25% standing/start
-    command_curriculum_steps: int = 20000   # linear ramp over this many steps
+    # Adaptive curriculum thresholds
+    curriculum_advance_threshold: float = 0.7   # advance when mean_ep_len > 70% of max
+    curriculum_retreat_threshold: float = 0.3    # retreat when mean_ep_len < 30% of max
+    curriculum_step_size: float = 0.02           # level change per resample call
     command_duration_min: float = 3.0  # seconds
     command_duration_max: float = 7.0  # seconds
 

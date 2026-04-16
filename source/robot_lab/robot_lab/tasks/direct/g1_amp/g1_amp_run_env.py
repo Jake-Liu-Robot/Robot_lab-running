@@ -43,6 +43,8 @@ class G1AmpRunEnv(G1AmpEnv):
         # Initial heading direction (set at reset, used for heading reward)
         self.initial_heading_vec = torch.zeros(self.num_envs, 2, device=self.device)
         self.initial_heading_vec[:, 0] = 1.0  # default: facing +x
+        # Curriculum: current level [0, 1], advances when episode_length is high
+        self.curriculum_level = 0.0
 
         # Domain randomization buffers
         self.push_interval = torch.zeros(self.num_envs, device=self.device)
@@ -123,18 +125,26 @@ class G1AmpRunEnv(G1AmpEnv):
     # ------------------------------------------------------------------ #
 
     def _resample_commands(self, env_ids: torch.Tensor):
-        """Sample new velocity commands with curriculum-based speed bands.
+        """Sample new velocity commands with adaptive curriculum.
 
         Three bands: high [3,4], mid [1,3], low [0,1] m/s.
-        Probabilities linearly ramp from start→final over curriculum_steps.
+        curriculum_level [0,1] advances when mean episode_length exceeds threshold,
+        retreats when it drops. Probabilities interpolate start→final.
         """
         n = len(env_ids)
-        # Curriculum: interpolate probabilities based on training progress
-        progress = min(self.common_step_counter / max(self.cfg.command_curriculum_steps, 1), 1.0)
-        prob_high = self.cfg.command_prob_high_start + progress * (
+        # Adaptive curriculum: update level based on mean episode length
+        mean_ep_len = self.episode_length_buf.float().mean().item()
+        ep_ratio = mean_ep_len / self.max_episode_length  # 0→1
+        # Advance if ratio > threshold, retreat if below
+        if ep_ratio > self.cfg.curriculum_advance_threshold:
+            self.curriculum_level = min(self.curriculum_level + self.cfg.curriculum_step_size, 1.0)
+        elif ep_ratio < self.cfg.curriculum_retreat_threshold:
+            self.curriculum_level = max(self.curriculum_level - self.cfg.curriculum_step_size, 0.0)
+
+        prob_high = self.cfg.command_prob_high_start + self.curriculum_level * (
             self.cfg.command_prob_high_final - self.cfg.command_prob_high_start
         )
-        prob_mid = self.cfg.command_prob_mid_start + progress * (
+        prob_mid = self.cfg.command_prob_mid_start + self.curriculum_level * (
             self.cfg.command_prob_mid_final - self.cfg.command_prob_mid_start
         )
         # Band selection
@@ -376,8 +386,7 @@ class G1AmpRunEnv(G1AmpEnv):
             "rew_heading_stand": rew_heading_stand.mean().item(),
             "heading_cos": heading_cos.mean().item(),
             "pelvis_height": pelvis_height.mean().item(),
-            "curriculum_prob_high": min(self.common_step_counter / max(self.cfg.command_curriculum_steps, 1), 1.0)
-                * (self.cfg.command_prob_high_final - self.cfg.command_prob_high_start) + self.cfg.command_prob_high_start,
+            "curriculum_level": self.curriculum_level,
             "total_reward": total_reward.mean().item(),
         }
         for key, value in basic_reward_log.items():
