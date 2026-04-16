@@ -43,10 +43,6 @@ class G1AmpRunEnv(G1AmpEnv):
         # Initial heading direction (set at reset, used for heading reward)
         self.initial_heading_vec = torch.zeros(self.num_envs, 2, device=self.device)
         self.initial_heading_vec[:, 0] = 1.0  # default: facing +x
-        # Curriculum state
-        self.curriculum_level = 0.0
-        self._curriculum_metric_ema = 0.0        # EMA of velocity tracking reward (0→1.5)
-        self._curriculum_cooldown = 0             # steps remaining before next level change
 
         # Domain randomization buffers
         self.push_interval = torch.zeros(self.num_envs, device=self.device)
@@ -127,42 +123,13 @@ class G1AmpRunEnv(G1AmpEnv):
     # ------------------------------------------------------------------ #
 
     def _resample_commands(self, env_ids: torch.Tensor):
-        """Sample new velocity commands with adaptive curriculum.
+        """Sample new velocity commands from fixed speed bands.
 
-        Three bands: high [3,4], mid [1,3], low [0,1] m/s.
-        curriculum_level [0,1] advances/retreats based on EMA of velocity
-        tracking reward, with cooldown to prevent oscillation.
+        Three bands: high [3,4] 30%, mid [1,3] 35%, low [0,1] 35%.
         """
         n = len(env_ids)
-        # --- Adaptive curriculum update ---
-        # Use velocity tracking reward as metric (not episode_length)
-        # rew_velocity = 1.5 * exp(-4*(v_wx - cmd)²), range [0, 1.5]
-        # Normalize to [0, 1]: metric = rew / 1.5
-        vel_rew = self.cfg.rew_velocity_tracking * torch.exp(
-            -4.0 * torch.square(
-                self.robot.data.body_lin_vel_w[:, self.ref_body_index, 0] - self.velocity_commands
-            )
-        ).mean().item()
-        metric = vel_rew / self.cfg.rew_velocity_tracking  # normalize to [0, 1]
-        # EMA smoothing
-        self._curriculum_metric_ema = 0.99 * self._curriculum_metric_ema + 0.01 * metric
-
-        if self._curriculum_cooldown > 0:
-            self._curriculum_cooldown -= 1
-        else:
-            if self._curriculum_metric_ema > self.cfg.curriculum_advance_threshold:
-                self.curriculum_level = min(self.curriculum_level + self.cfg.curriculum_step_size, 1.0)
-                self._curriculum_cooldown = self.cfg.curriculum_cooldown_steps
-            elif self._curriculum_metric_ema < self.cfg.curriculum_retreat_threshold:
-                self.curriculum_level = max(self.curriculum_level - self.cfg.curriculum_step_size, 0.0)
-                self._curriculum_cooldown = self.cfg.curriculum_cooldown_steps
-
-        prob_high = self.cfg.command_prob_high_start + self.curriculum_level * (
-            self.cfg.command_prob_high_final - self.cfg.command_prob_high_start
-        )
-        prob_mid = self.cfg.command_prob_mid_start + self.curriculum_level * (
-            self.cfg.command_prob_mid_final - self.cfg.command_prob_mid_start
-        )
+        prob_high = self.cfg.command_prob_high
+        prob_mid = self.cfg.command_prob_mid
         # Band selection
         roll = torch.rand(n, device=self.device)
         high_mask = roll < prob_high
@@ -402,8 +369,6 @@ class G1AmpRunEnv(G1AmpEnv):
             "rew_heading_stand": rew_heading_stand.mean().item(),
             "heading_cos": heading_cos.mean().item(),
             "pelvis_height": pelvis_height.mean().item(),
-            "curriculum_level": self.curriculum_level,
-            "curriculum_vel_ema": self._curriculum_metric_ema,
             "total_reward": total_reward.mean().item(),
         }
         for key, value in basic_reward_log.items():
@@ -414,8 +379,6 @@ class G1AmpRunEnv(G1AmpEnv):
         # Print curriculum status every 1000 steps
         if self.common_step_counter % 1000 == 0:
             print(f"[STEP {self.common_step_counter}] "
-                  f"cur_lvl={self.curriculum_level:.2f} "
-                  f"vel_ema={self._curriculum_metric_ema:.3f} "
                   f"ep={self.episode_length_buf.float().mean().item():.0f} "
                   f"fwd={forward_vel.mean().item():.2f} "
                   f"cmd={cmd_vel.mean().item():.2f} "

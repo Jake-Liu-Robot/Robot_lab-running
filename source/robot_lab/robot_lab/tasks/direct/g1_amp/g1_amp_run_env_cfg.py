@@ -45,27 +45,15 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     # AMP obs remains 105 (inherited): discriminator sees motion features only,
     # no velocity command → won't penalize speed generalization
 
-    # --- velocity command with curriculum ---
+    # --- velocity command (fixed distribution, no curriculum) ---
     # Three speed bands: low [0, 1), mid [1, 3), high [3, 4] m/s
-    # Curriculum: start conservative, linearly ramp to final distribution
     command_vel_min: float = 0.0
     command_vel_max: float = 4.0
     command_vel_low_cutoff: float = 1.0   # boundary between low/mid bands
     command_vel_high_cutoff: float = 3.0  # boundary between mid/high bands
-    # Start distribution (curriculum_level = 0)
-    command_prob_high_start: float = 0.15   # 15% sprint
-    command_prob_mid_start: float = 0.35    # 35% jog
-    # P(low) = 50% standing/start
-    # Final distribution (curriculum_level = 1)
-    command_prob_high_final: float = 0.45   # 45% sprint
-    command_prob_mid_final: float = 0.30    # 30% jog
-    # P(low) = 25% standing/start
-    # Adaptive curriculum (based on EMA of normalized velocity tracking reward)
-    # metric = mean(exp(-4*(v_wx - cmd)²)), range [0, 1], 1.0 = perfect tracking
-    curriculum_advance_threshold: float = 0.5   # advance when tracking > 50%
-    curriculum_retreat_threshold: float = 0.3    # retreat when tracking < 30% (standing-only ≈ 0.23)
-    curriculum_step_size: float = 0.05           # level change per trigger
-    curriculum_cooldown_steps: int = 20000       # resample calls (~1200 sim steps ≈ 1 full episode)
+    command_prob_high: float = 0.30       # 30% sprint [3,4]
+    command_prob_mid: float = 0.35        # 35% jog [1,3]
+    # P(low) = 35% standing/start [0,1]
     command_duration_min: float = 3.0  # seconds
     command_duration_max: float = 7.0  # seconds
 
