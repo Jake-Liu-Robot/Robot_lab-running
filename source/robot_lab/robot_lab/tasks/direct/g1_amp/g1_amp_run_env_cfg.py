@@ -60,10 +60,11 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     command_prob_high_final: float = 0.45   # 45% sprint
     command_prob_mid_final: float = 0.30    # 30% jog
     # P(low) = 25% standing/start
-    # Adaptive curriculum thresholds
-    curriculum_advance_threshold: float = 0.7   # advance when mean_ep_len > 70% of max
-    curriculum_retreat_threshold: float = 0.3    # retreat when mean_ep_len < 30% of max
-    curriculum_step_size: float = 0.02           # level change per resample call
+    # Adaptive curriculum (based on EMA of episode_length / max_episode_length)
+    curriculum_advance_threshold: float = 0.7   # advance when EMA > 70%
+    curriculum_retreat_threshold: float = 0.3    # retreat when EMA < 30%
+    curriculum_step_size: float = 0.05           # level change per trigger
+    curriculum_cooldown_steps: int = 500         # resample calls to wait after each change
     command_duration_min: float = 3.0  # seconds
     command_duration_max: float = 7.0  # seconds
 

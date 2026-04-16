@@ -43,8 +43,10 @@ class G1AmpRunEnv(G1AmpEnv):
         # Initial heading direction (set at reset, used for heading reward)
         self.initial_heading_vec = torch.zeros(self.num_envs, 2, device=self.device)
         self.initial_heading_vec[:, 0] = 1.0  # default: facing +x
-        # Curriculum: current level [0, 1], advances when episode_length is high
+        # Curriculum state
         self.curriculum_level = 0.0
+        self._curriculum_ep_ema = 0.0            # exponential moving average of episode ratio
+        self._curriculum_cooldown = 0             # steps remaining before next level change
 
         # Domain randomization buffers
         self.push_interval = torch.zeros(self.num_envs, device=self.device)
@@ -128,18 +130,25 @@ class G1AmpRunEnv(G1AmpEnv):
         """Sample new velocity commands with adaptive curriculum.
 
         Three bands: high [3,4], mid [1,3], low [0,1] m/s.
-        curriculum_level [0,1] advances when mean episode_length exceeds threshold,
-        retreats when it drops. Probabilities interpolate start→final.
+        curriculum_level [0,1] advances/retreats based on EMA of episode_length,
+        with cooldown to prevent oscillation.
         """
         n = len(env_ids)
-        # Adaptive curriculum: update level based on mean episode length
+        # --- Adaptive curriculum update ---
         mean_ep_len = self.episode_length_buf.float().mean().item()
         ep_ratio = mean_ep_len / self.max_episode_length  # 0→1
-        # Advance if ratio > threshold, retreat if below
-        if ep_ratio > self.cfg.curriculum_advance_threshold:
-            self.curriculum_level = min(self.curriculum_level + self.cfg.curriculum_step_size, 1.0)
-        elif ep_ratio < self.cfg.curriculum_retreat_threshold:
-            self.curriculum_level = max(self.curriculum_level - self.cfg.curriculum_step_size, 0.0)
+        # EMA smoothing (α=0.01 → slow, stable estimate)
+        self._curriculum_ep_ema = 0.99 * self._curriculum_ep_ema + 0.01 * ep_ratio
+
+        if self._curriculum_cooldown > 0:
+            self._curriculum_cooldown -= 1
+        else:
+            if self._curriculum_ep_ema > self.cfg.curriculum_advance_threshold:
+                self.curriculum_level = min(self.curriculum_level + self.cfg.curriculum_step_size, 1.0)
+                self._curriculum_cooldown = self.cfg.curriculum_cooldown_steps
+            elif self._curriculum_ep_ema < self.cfg.curriculum_retreat_threshold:
+                self.curriculum_level = max(self.curriculum_level - self.cfg.curriculum_step_size, 0.0)
+                self._curriculum_cooldown = self.cfg.curriculum_cooldown_steps
 
         prob_high = self.cfg.command_prob_high_start + self.curriculum_level * (
             self.cfg.command_prob_high_final - self.cfg.command_prob_high_start
@@ -387,6 +396,7 @@ class G1AmpRunEnv(G1AmpEnv):
             "heading_cos": heading_cos.mean().item(),
             "pelvis_height": pelvis_height.mean().item(),
             "curriculum_level": self.curriculum_level,
+            "curriculum_ep_ema": self._curriculum_ep_ema,
             "total_reward": total_reward.mean().item(),
         }
         for key, value in basic_reward_log.items():
