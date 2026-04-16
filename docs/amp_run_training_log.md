@@ -882,7 +882,148 @@ Run 6 (修数据):
 
 ---
 
-## 15. 后续计划
+## 15. 训练 Run 7 — 高度锁死修复 + Yaw 偏差纠正（2026-04-16）
+
+### 15.1 起因：发现 Run 6 策略的作弊
+
+Run 6 在 eval 中显示 `pelvis_height = 0.54m`（目标 0.75），严重蹲姿跑步（"Groucho walk"），速度 fwd_vel 1.49 m/s 配合深蹲。
+
+**诊断**：
+```
+rew_velocity    = 1.5·exp(-4·0.21²) = +1.26/step  (主导)
+rew_base_height_run = -3·0.49·0.044 = -0.065/step  (仅 5% 权重)
+→ 策略完全无视高度惩罚，选择蹲跑换稳定
+```
+
+### 15.2 初始大改：四处调整 + 全新训练
+
+**配置变更**（`g1_amp_run_env_cfg.py` + `skrl_run_amp_cfg.yaml`）：
+
+| 参数 | Run 6 | Run 7 | 倍数 |
+|------|-------|-------|------|
+| `rew_base_height_run` | -3.0 | **-10.0** | ×3.3 |
+| `termination_height` | 0.25 | **0.45** | +80% |
+| `task_reward_weight` | 0.6 | **0.5** | -17% |
+| `style_reward_weight` | 0.4 | **0.5** | +25% |
+| `gradient_penalty` | 5.0 | 5.0 (保持) | — |
+
+**TB 日志改进**（一劳永逸）：
+- `train.py`: `runner = Runner(...)` 后把 `runner.agent` 附到 `env.unwrapped._skrl_agent`
+- `g1_amp_run_env.py._get_rewards()`: 加 `agent.track_data(f"Reward/{k}", v)` 循环
+- 效果：TB 新增 `Reward/rew_velocity`, `Reward/pelvis_height`, `Reward/forward_vel` 等所有 per-term 指标
+
+**启动**：从零重训（不用 checkpoint）— 旧 policy 作弊太深，续训会固化。
+
+### 15.3 训练早期（0-35K 步）
+
+```
+STEP 1000: ep=7   fwd=0.63 h=0.631   rew=-1.41   (随机策略，频繁摔)
+STEP 6000: ep=13  fwd=0.44 h=0.665   rew=-0.24   (学到站)
+STEP 15000: ep=29 fwd=0.46 h=0.689   rew=+0.01   (平衡期)
+STEP 30000: ep=45 fwd=0.58 h=0.688   rew=+0.23   (突破)
+STEP 35000: ep=65 fwd=0.63 h=0.677   rew=+0.33   ⚠️ pelvis 回落
+```
+
+**35K 步诊断**：pelvis_h 从 0.690 回落到 0.677 — 作弊倾向重现。
+
+### 15.4 Fix 1：移除 `run_scale` 门控（代码改动）
+
+**根因**：`rew_base_height_run` 公式为
+```python
+rew_base_height_run = cfg × run_scale × (h - 0.75)²
+# run_scale = clamp(speed - 1.0, 0, 1)
+```
+当 `fwd_vel < 1` 时 `run_scale=0` → **加速阶段完全不惩罚蹲姿**。
+
+**修改**（`g1_amp_run_env.py` line 321-323）：
+```python
+# 去掉 run_scale 门控
+rew_base_height_run = self.cfg.rew_base_height_run * torch.square(
+    pelvis_height - self.cfg.target_base_height
+)
+```
+
+**续训**（从 `agent_30000.pt`）：
+
+```
++5K  : rew_base_height_run = -0.097  (从 -0.012 跳到 -0.097，×8 生效)
+       pelvis_h 0.688 (开始回升)
++10K : ep=103   fwd=0.78  h=0.691   rew=+0.30  (ep 大跳)
++15K : ep=186   fwd=0.97  h=0.698   (速度突破 1 m/s)
++20K : ep=261   fwd=1.10  h=0.697
++25K : ep=365   fwd=1.32  h=0.696
++30K : ep=584   fwd=1.66  h=0.695
++35K : ep=734   fwd=1.80  h=0.694
++40K : ep=819   fwd=1.87  h=0.696
++45K : ep=871   fwd=1.89  h=0.695
++50K : ep=885   fwd=1.89  h=0.696   (中速平台)
++55K : ep=903   fwd=1.89  h=0.694
++60K : ep=929   fwd=1.91  h=0.696   ⚠️ heading 卡 0.990
+```
+
+### 15.5 Pelvis 完美匹配参考（意外惊喜）
+
+分析参考数据发现：
+
+```python
+# 参考数据分段 pelvis_z 均值
+All frames:                  0.723
+Running (speed>1.5):         0.694  ⭐
+Standing (speed<0.3):        0.777
+```
+
+Policy 最终 `pelvis_h = 0.694` **精确匹配参考跑步段均值**（精确到小数第三位）。
+
+**教训**：不要把 policy 的纯跑步 pelvis 和参考的全部帧均值比较。AMP 判别器会推向**相应行为模式下的参考**，不是全局均值。
+
+### 15.6 Fix 2：发现 yaw 锁死偏差
+
+**现象**：heading_cos 在 0.990 附近平台化（8.1° body yaw）
+
+```
+收敛速度减速:
++30K→+40K: 0.986 → 0.989 (yaw -1.1°)
++40K→+50K: 0.989 → 0.990 (yaw -0.4°)
++50K→+60K: 0.990 → 0.990 (停滞)
+```
+
+**关键诊断：参考数据分析**
+
+```bash
+/isaac-sim/python.sh -c "import numpy as np; from scipy.spatial.transform import Rotation; d=np.load('.../g1_run_and_stand.npz'); bq=d['body_rotations']; bv=d['body_linear_velocities']; speed=np.linalg.norm(bv[:,0,:2], axis=1); run_mask=speed>1.5; q=Rotation.from_quat(bq[run_mask,0][:,[1,2,3,0]]); yaw=q.as_euler('zyx')[:,0]; print(f'yaw mean={np.degrees(yaw.mean()):.2f} std={np.degrees(yaw.std()):.2f} max={np.degrees(np.abs(yaw).max()):.2f}')"
+
+输出:
+yaw mean = 0.00°    ← 参考完美对称（镜像操作结果）
+yaw std  = 1.98°    ← 自然步态摆动
+yaw max  = 6.39°    ← 任何单帧最大偏差
+```
+
+**结论**：参考的单帧最大 yaw 只有 **6.39°**，policy 的**平均** yaw 就 8° — 完全超出参考分布。这是 policy 学出的**固定偏差**（locked bias），不是自然摆动。
+
+**为什么 AMP 判别器没拦住**：判别器看 3 帧转移；policy 每 3 帧都保持稳定 8° yaw，"从 0° 到 0°" 和 "从 8° 到 8°" 的**转移看起来一样**（静态差异 = 判别器盲点）。
+
+### 15.7 Fix 2 实施：heading 惩罚 ×3
+
+```python
+# g1_amp_run_env_cfg.py
+rew_heading_run: float = -1.0 → -3.0   # 只改系数，保留 cos 公式
+```
+
+**为何保留 cos 公式**：绝对角度公式（|yaw|）的梯度是 cos 公式的 ~14×（在 8° 时）。如果同时用 abs 公式 + 保持 -3.0 系数，penalty 会爆炸到 -0.374/step（37% 总奖励），直接崩溃。
+
+**保守策略**：先试 `-3.0 cos` —— penalty 从 -0.005 → -0.015（×3），占正奖励 1.5%。若 20K 步后 heading_cos 不突破 0.993，再升级到 `abs` 公式（系数需降到 -0.5）。
+
+### 15.8 Run 7 关键洞察
+
+1. **作弊检测**：pelvis_h < 参考 min 立即报警，不要和参考 mean 比
+2. **门控陷阱**：奖励被 `run_scale` 等速度条件门控 → 低速阶段无惩罚 → 作弊温床
+3. **判别器盲点**：frame-to-frame 转移相同的**固定偏差**逃过判别器
+4. **数据分段分析**：参考数据按 speed 分段，各段均值独立对比
+5. **小步调试**：大改后一次只改一个参数，观察 → 决策 → 再改
+
+---
+
+## 16. 后续计划
 
 ### Sim-to-Sim 流程
 
@@ -1011,11 +1152,26 @@ Run 5b (20K步) — 失败（温和但仍太多）
   episode: 763→879→672→593（持续下降）
   教训: 改3-4项仍然太多
 
-Run 6 (进行中) — 修数据根因
+Run 6 — 矫直+站立数据
   数据: 矫直轨迹(去除113°偏航) + 左右镜像 + 合成站立(FK默认姿态)
   奖励: heading -0.5→-0.75 (×1.5)，其他不变
   10K步 episode=989 ✅，方向偏转改善 ✅
-  正在加站立数据继续训练
+  + 站立数据: episode=1010 ✅ (突破 Run 4b 天花板 989)
+  Eval 发现: pelvis_h=0.54 深蹲作弊（Groucho walk）⚠️
+
+Run 7 (2026-04-16) — 高度锁死修复 + yaw 纠正
+  Phase 1 (0-35K): 全新训练
+    rew_base_height_run: -3 → -10，termination: 0.25 → 0.45
+    task/style: 0.6/0.4 → 0.5/0.5
+    + 移除 rew_base_height_run 的 run_scale 门控
+    + train.py 加 _skrl_agent hook → TB 所有 per-term 指标
+    35K 发现 pelvis_h 回落 0.677 → 移除 run_scale 门控
+  Phase 2 (+60K 续训):
+    pelvis_h 稳定 0.694 = 参考跑步段均值（完美匹配）✅
+    fwd_vel 1.91 = cmd_vel 1.86 (速度跟踪几乎完美) ✅
+    heading_cos 0.990 卡 8° yaw (参考 yaw std=2°，为学出 bug)
+  Phase 3 (进行中): rew_heading_run -1.0 → -3.0
+    目标: 20K 步内 heading_cos > 0.993
 ```
 
 ## 附录 C：Git Commit 记录
@@ -1041,4 +1197,8 @@ Run 6 (进行中) — 修数据根因
 | `bad3d7d` | sim-to-sim: export_policy.py + sim2sim_mujoco.py |
 | `e1ba89d` | sim-to-sim 修复: actuator/action_scale/mesh |
 | `ec577d2` | eval 关闭域随机化 |
+| Run 7 Phase 1 | Tune rewards: height×3.3, termination 0.25→0.45, AMP 0.5/0.5 |
+| Run 7 Phase 1 | Expose per-term reward logs to TB via track_data |
+| Run 7 Phase 2 | Remove run_scale gating from rew_base_height_run |
+| Run 7 Phase 3 | Strengthen rew_heading_run -1.0→-3.0 (fix locked 8° yaw) |
 | `b978c03` | Run 4b: base_height=-3, heading=-0.5, standing=-0.01 |
