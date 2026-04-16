@@ -50,6 +50,10 @@ class G1AmpRunEnv(G1AmpEnv):
         # PD gain scale per env (1.0 = nominal, randomized at reset)
         self.pd_gain_scale = torch.ones(self.num_envs, self.cfg.action_space, device=self.device)
 
+        # Foot body indices for gait phase reward
+        self.left_foot_idx = self.robot.data.body_names.index("left_ankle_roll_link")
+        self.right_foot_idx = self.robot.data.body_names.index("right_ankle_roll_link")
+
         # Speed up reference motion so discriminator learns faster gait
         if self.cfg.motion_speed != 1.0:
             s = self.cfg.motion_speed
@@ -156,8 +160,8 @@ class G1AmpRunEnv(G1AmpEnv):
                 + (self.cfg.command_vel_low_cutoff - self.cfg.command_vel_min) * torch.rand(n_low, device=self.device)
             )
 
-        # 15% exact zero velocity for standing training
-        zero_mask = torch.rand(n, device=self.device) < 0.15
+        # 10% exact zero velocity for standing training
+        zero_mask = torch.rand(n, device=self.device) < 0.10
         vel[zero_mask] = 0.0
 
         self.velocity_commands[env_ids] = vel
@@ -309,6 +313,19 @@ class G1AmpRunEnv(G1AmpEnv):
         squat_error = torch.clamp(self.cfg.target_base_height - pelvis_height, min=0.0)
         rew_standing_height = self.cfg.rew_standing_height * low_speed_scale * squat_error * squat_error
 
+        # ================= gait phase (running only) ==================
+        # Penalize double stance during running → encourage flight phase
+        # Running = both feet off ground at some point; walking = always one foot on ground
+        left_foot_z = self.robot.data.body_pos_w[:, self.left_foot_idx, 2]
+        right_foot_z = self.robot.data.body_pos_w[:, self.right_foot_idx, 2]
+        contact_threshold = 0.05
+        left_contact = (left_foot_z < contact_threshold).float()
+        right_contact = (right_foot_z < contact_threshold).float()
+        # Only active when running (speed > 1.5 m/s)
+        run_scale = torch.clamp(actual_speed - 1.5, 0.0, 1.0)
+        double_stance = left_contact * right_contact
+        rew_gait_phase = self.cfg.rew_gait_phase * run_scale * double_stance
+
         # ================= basic penalties ============================
         basic_reward, basic_reward_log = compute_rewards(
             self.cfg.rew_termination,
@@ -335,6 +352,7 @@ class G1AmpRunEnv(G1AmpEnv):
             + rew_heading
             + rew_standing_still
             + rew_standing_height
+            + rew_gait_phase
             + basic_reward
         )
 
@@ -351,6 +369,7 @@ class G1AmpRunEnv(G1AmpEnv):
             "rew_heading": rew_heading.mean().item(),
             "rew_standing_still": rew_standing_still.mean().item(),
             "rew_standing_height": rew_standing_height.mean().item(),
+            "rew_gait_phase": rew_gait_phase.mean().item(),
             "heading_dot": heading_dot.mean().item(),
             "total_reward": total_reward.mean().item(),
         }
