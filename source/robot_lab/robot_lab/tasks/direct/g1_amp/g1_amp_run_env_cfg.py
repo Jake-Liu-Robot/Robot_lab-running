@@ -33,7 +33,7 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     """
 
     # --- motion data ---
-    motion_file = os.path.join(MOTIONS_DIR, "g1_run2_subject1_30.npz")
+    motion_file = os.path.join(MOTIONS_DIR, "g1_run2_subject1_30_straight_mirror.npz")
     motion_speed: float = 1.0  # 1.0 = natural speed; increase if discriminator blocks high-speed running
 
     # --- episode ---
@@ -69,10 +69,10 @@ class G1AmpRunEnvCfg(G1AmpDanceEnvCfg):
     rew_lateral_vel: float = -0.5   # penalize sideways drift
     rew_yaw_rate: float = -0.5      # penalize spinning (reverted, -1.0 broke gait)
     rew_action_rate: float = -0.1   # penalize jerky actions, increased for smoother standing
-    rew_heading: float = -1.0       # angle-squared penalty, 2x original (was -0.5)
-    rew_standing_still: float = -0.02  # 2x original, penalize joint velocity when standing (was -0.01)
-    rew_standing_height: float = -3.0  # penalize squatting (low pelvis) only when standing (new, gentle)
-    rew_gait_phase: float = -1.0   # penalize double stance during running (encourage flight phase)
+    rew_heading: float = -0.75      # 1.5x original, same formula (was -0.5)
+    rew_standing_still: float = -0.01  # keep original
+    rew_standing_height: float = 0.0   # disabled for Round 1
+    rew_gait_phase: float = 0.0    # disabled for Round 1
 
     # --- disable env-side imitation (discriminator handles style) ---
     rew_imitation_pos = 0.0

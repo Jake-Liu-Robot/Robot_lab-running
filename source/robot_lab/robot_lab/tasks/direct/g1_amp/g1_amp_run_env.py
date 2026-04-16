@@ -160,8 +160,8 @@ class G1AmpRunEnv(G1AmpEnv):
                 + (self.cfg.command_vel_low_cutoff - self.cfg.command_vel_min) * torch.rand(n_low, device=self.device)
             )
 
-        # 10% exact zero velocity for standing training
-        zero_mask = torch.rand(n, device=self.device) < 0.10
+        # 5% exact zero velocity for standing training (Round 1: minimal)
+        zero_mask = torch.rand(n, device=self.device) < 0.05
         vel[zero_mask] = 0.0
 
         self.velocity_commands[env_ids] = vel
@@ -297,9 +297,7 @@ class G1AmpRunEnv(G1AmpEnv):
         heading_vec = quat_apply(root_quat_w, forward_ref)  # current facing direction
         heading_xy = heading_vec[:, :2]  # project to XY plane
         heading_dot = (heading_xy * self.initial_heading_vec).sum(dim=-1)
-        heading_dot = torch.clamp(heading_dot, -1.0, 1.0)
-        heading_angle = torch.acos(heading_dot)
-        rew_heading = self.cfg.rew_heading * heading_angle * heading_angle
+        rew_heading = self.cfg.rew_heading * (1.0 - heading_dot)
 
         # ================= standing penalties (only when speed < 1 m/s) ============
         actual_speed = torch.abs(forward_vel)
