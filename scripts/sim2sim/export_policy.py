@@ -23,39 +23,51 @@ def main():
     print(f"[INFO] Loading checkpoint: {args.checkpoint}")
     ckpt = torch.load(args.checkpoint, map_location="cpu")
 
+    # Flatten nested state dicts so the rest of the script works on both
+    # legacy-flat (policy_net_0.weight) and new-nested (policy -> OrderedDict) layouts.
+    flat = {}
+    for top_key, top_val in ckpt.items():
+        if hasattr(top_val, "items") and not hasattr(top_val, "shape"):
+            for sub_key, sub_val in top_val.items():
+                flat[f"{top_key}.{sub_key}"] = sub_val
+        else:
+            flat[top_key] = top_val
+
+    print(f"\n[INFO] Flattened checkpoint keys ({len(flat)}):")
+    for key in sorted(flat.keys()):
+        v = flat[key]
+        shape = v.shape if hasattr(v, "shape") else type(v).__name__
+        print(f"  {key}: {shape}")
+
     # --- Extract policy network weights ---
+    # Match either "policy_net_N.weight" (flat) or "policy.net_N.weight" (nested).
+    # Output uses the flat form expected by sim2sim_mujoco.py.
     policy_state = {}
-    for key, value in ckpt.items():
-        if key.startswith("policy"):
-            # skrl keys: "policy_net_0.weight", "policy_net_0.bias", etc.
-            policy_state[key] = value
-            print(f"  Policy: {key} → {value.shape}")
+    for key, value in flat.items():
+        norm_key = key.replace("policy.", "policy_")
+        if norm_key.startswith("policy_net_") or norm_key.startswith("policy_log_std"):
+            policy_state[norm_key] = value
+            print(f"  Policy: {key} → {norm_key} {tuple(value.shape)}")
 
     # --- Extract observation normalizer (RunningStandardScaler) ---
     preprocessor_state = {}
-    for key, value in ckpt.items():
+    for key, value in flat.items():
         if "state_preprocessor" in key and "amp" not in key and "value" not in key:
             preprocessor_state[key] = value
-            print(f"  Preprocessor: {key} → {value.shape if hasattr(value, 'shape') else value}")
+            shape = value.shape if hasattr(value, "shape") else value
+            print(f"  Preprocessor: {key} → {shape}")
 
     # --- Extract action log_std (fixed) ---
     log_std = None
-    for key, value in ckpt.items():
+    for key, value in flat.items():
         if "log_std" in key:
             log_std = value
             print(f"  Log std: {key} → {value}")
 
-    # --- Print all keys for debugging ---
-    print(f"\n[INFO] All checkpoint keys:")
-    for key in sorted(ckpt.keys()):
-        v = ckpt[key]
-        shape = v.shape if hasattr(v, 'shape') else type(v).__name__
-        print(f"  {key}: {shape}")
-
     # --- Extract action scaling (if available) ---
     action_offset = None
     action_scale = None
-    for key, value in ckpt.items():
+    for key, value in flat.items():
         if "action_offset" in key:
             action_offset = value
             print(f"  Action offset: {key} → {value.shape}")
