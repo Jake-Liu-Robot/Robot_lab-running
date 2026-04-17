@@ -377,10 +377,11 @@ AMP obs (105维):    joint_pos(29) + joint_vel(29) + height(1) + orient(6) + key
   → 判别器看不到速度命令，不会惩罚"跑得比参考快"
 ```
 
-**奖励组合**（skrl 内部）：
+**奖励组合**（skrl 内部，Phase 4 起）：
 ```
-r_total = 0.7 × r_task (env返回) + 0.3 × r_style (判别器)
-# 0.7/0.3 确保速度命令主导，否则判别器的"跑步偏好"会阻止策略停下
+r_total = 0.5 × r_task (env返回) + 0.5 × r_style (判别器)
+# Phase 4 将 0.7/0.3 → 0.5/0.5：判别器被过度弱化时无法纠正步态（跑步 gait 回归站立抬腿）
+# grad_penalty 保持 5.0（Phase 4 短暂降到 3.0 后回退，见 commit 99ec0bb）
 ```
 
 **速度命令**（随机偏向高速采样）：
@@ -395,15 +396,26 @@ r_total = 0.7 × r_task (env返回) + 0.3 × r_style (判别器)
 → 切换均匀采样：command_prob_high=0.25, command_prob_mid=0.5
 ```
 
-**环境 task_reward** (`g1_amp_run_env.py`):
+**环境 task_reward** (`g1_amp_run_env.py`，Phase 5 生效中):
 ```
-velocity_tracking:  1.5 × exp(-4·(v_forward - cmd_vel)²)  ← 跟踪随机命令
-upright:            0.2 × pelvis_up_z                      ← 保持直立
-base_height:       -2.0 × (h - 0.75)²                     ← 重心高度约束
-lateral_vel:       -0.5 × vy²                              ← 抑制侧移
-yaw_rate:          -0.1 × ωz²                              ← 抑制转向
-action_rate:       -0.05 × Σ(Δa²)                          ← 动作平滑
-penalties:          action_l2(-0.1) + joint_limits(-10) + joint_acc(-1e-6) + joint_vel(-0.001)
+# 共享（所有速度）
+velocity_tracking:  1.5 × exp(-4·(v_wx - cmd)²)            ← 世界 X 方向速度跟踪
+upright:            1.0 × pelvis_up_z                       ← 保持直立
+rew_base_height_run: -10.0 × (h - 0.75)²                    ← 重心高度约束（Phase 4: -3→-10, 移除 run_scale 门控）
+action_rate:       -0.1 × Σ(Δa²)                            ← 动作平滑
+
+# 跑步段（cmd_vel > 1，run_scale = clamp(cmd-1, 0, 1)）
+rew_heading_run:   -10.0 × run_scale × (1 - cos(yaw))       ← Phase 5: -5→-10 破 7° yaw plateau
+rew_lateral_vel_run: -0.5 × run_scale × vy²                 ← 抑制侧移
+
+# 站立段（cmd_vel < 1，stand_scale = clamp(1-cmd, 0, 1)）
+rew_standing_height: -2.0 × stand_scale × (h - 0.75)²
+rew_standing_still:  -0.01 × stand_scale × |joint_vel|
+rew_yaw_rate_stand:  -0.3 × stand_scale × ωz²
+rew_heading_stand:   -0.5 × stand_scale × (1 - cos(yaw))
+
+# 终止
+termination_height: 0.45   ← Phase 4: 0.25→0.45, 防深蹲作弊（当前 h=0.698，25cm safety margin）
 
 注意：无显式模仿奖励——判别器已承担风格约束
 ```
@@ -429,9 +441,10 @@ gradient_penalty = 5.0 (防止判别器过拟合)
 |------|------|
 | `g1_amp/__init__.py` | 注册 Dance + Run 两个任务 |
 | `g1_amp/g1_amp_run_env.py` | 继承 G1AmpEnv，随机速度命令 + 纯任务奖励 |
-| `g1_amp/g1_amp_run_env_cfg.py` | 配置：cmd_vel[0,4], episode=20s, obs=109 |
-| `g1_amp/agents/skrl_run_amp_cfg.yaml` | task_w=0.7, style_w=0.3 |
+| `g1_amp/g1_amp_run_env_cfg.py` | 配置：cmd_vel[0,4], episode=20s, obs=109, termination_height=0.45 |
+| `g1_amp/agents/skrl_run_amp_cfg.yaml` | task_w=0.5, style_w=0.5（Phase 4） |
 | `g1_amp/motions/csv2npz_run.py` | 参数化数据转换脚本（Pinocchio FK） |
+| `docs/amp_run_training_log.md` | **完整训练调参日志** — Run 1→7 + Phase 3/4/5，含每次改动的原因和结果 |
 
 ### 训练（RunPod）
 
@@ -458,8 +471,14 @@ gradient_penalty = 5.0 (防止判别器过拟合)
 | disc_accuracy | 55-85% | >95% → 增大 gradient_penalty 或设 motion_speed=1.3 |
 | forward_vel | 趋近 cmd_vel 均值(~2) | 停滞 → 增大 task_reward_weight |
 | cmd_vel vs forward_vel | 两者趋势一致 | 不跟踪 → 检查 obs 是否包含 cmd_vel |
-| episode_length | 趋近 20s | <2s → termination_height 过高 |
+| episode_length | 趋近 20s（1000 步 = 满格 24s） | <2s → termination_height 过高 |
 | rew_velocity | 趋近 1.0+ | 持续 <0.1 → velocity reward 梯度消失，靠判别器 bootstrap |
+| **pelvis_height（作弊警报）** | **≥ 0.72（参考 mean），Phase 5 当前 0.698** | **≥3 cm 下跌 → 策略发现新作弊路径，立即停训排查（见 Phase 4 squat-cheat 事件）** |
+| **heading_cos** | **> 0.99（Phase 5 目标）** | **卡在 0.97（~7° yaw plateau）→ 提高 heading 权重或切 abs 公式** |
+
+⚠️ **恢复训练只用 `agent_<iter>.pt`，不要用 `best_agent.pt`**：best 按 eval return 选，可能滞后真实训练状态；`agent_<iter>.pt` 精确对应某一步。
+
+⚠️ **TB 已启用 per-term 奖励日志**（`Reward/rew_velocity`, `Reward/rew_base_height_run`, `Reward/rew_heading_run` 等）→ 应监控每项而非仅 total_reward。
 
 ---
 

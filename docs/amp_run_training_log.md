@@ -1202,3 +1202,137 @@ Run 7 (2026-04-16) — 高度锁死修复 + yaw 纠正
 | Run 7 Phase 2 | Remove run_scale gating from rew_base_height_run |
 | Run 7 Phase 3 | Strengthen rew_heading_run -1.0→-3.0 (fix locked 8° yaw) |
 | `b978c03` | Run 4b: base_height=-3, heading=-0.5, standing=-0.01 |
+| `78c3922` | Phase 3: cmd_high 0.3→0.6 + rew_heading_run -3→-5（推高速 + 攻 yaw plateau） |
+| `92f99d5` | Phase 3 eval (agent_30000): pelvis 0.70, yaw 7.3°, fwd 1.9 m/s |
+| `9adcc69` | Phase 4: cmd_vel-based scales + heading -5 + cmd_duration 缩短（修减速 + yaw 震荡） |
+| `8548271` | Phase 4 final: cmd_vel gating（修减速 bug）+ heading -5 only（避免 double penalty） |
+| `e4689ba` | Phase 4 +20k eval: ramp 模式（减速测试，cmd_vel gating 修复后） |
+| `200e19d` | Phase 4+: heading 切绝对角度公式（小 yaw 梯度不消失） |
+| `56deb0b` | Fix export_policy.py: 处理 skrl checkpoint 的嵌套 OrderedDict |
+| `5bd48b7` | Phase 5: heading -5→-10（cos）破 7° yaw plateau，从 Phase 4 checkpoint 续训 |
+
+---
+
+## 17. Phase 3/4/5 — Squat-Cheat 修复 + Yaw Plateau 攻关（2026-04-16）
+
+承接 Run 7 Fix 2（heading_run -1→-3）。此阶段进入多轮快速迭代，每轮聚焦一个问题 → 小改 → eval → 再改。
+
+### 17.1 Phase 3：推高速 + 继续攻 yaw（commit `78c3922`）
+
+**改动**：
+```python
+command_prob_high: 0.3 → 0.6   # 60% 采样 [3,4] m/s，强迫策略见高速命令
+rew_heading_run:   -3 → -5      # 再 ×1.67，cos 公式（未切 abs）
+```
+
+**理由**：Run 7 Fix 2 后 yaw 从 8° 只降到 ~7°，plateau 明显；同时 fwd_vel 只到 ~1.9 m/s，离目标 4 m/s 还远。推 cmd 高速分布 + 加压 heading。
+
+**结果（`92f99d5` eval @ agent_30000）**：
+- `pelvis_height`: 0.70（接近参考 0.72，未倒退）
+- `heading_cos`: ~0.992（yaw 7.3° → 仍卡 plateau）
+- `forward_vel`: 1.9 m/s（未进一步升）
+
+**诊断**：yaw plateau 靠 cos 公式的小系数加压打不破；减速阶段(cmd 从高→低)策略来不及减速 → 冲出 episode 边界或速度超调。
+
+### 17.2 Phase 4：cmd_vel gating 修减速 bug（commits `9adcc69`, `8548271`）
+
+**Phase 4 改动链（`9adcc69`）**：
+```python
+# 1) 改 scale 基准：原用 fwd_vel（实际速度）→ 改用 cmd_vel（命令速度）
+run_scale   = clamp(cmd_vel - 1.0, 0.0, 1.0)   # 原: clamp(fwd_vel - 1.0, 0, 1)
+stand_scale = clamp(1.0 - cmd_vel, 0.0, 1.0)
+
+# 2) cmd_duration 缩短：7s → 4s 最大、3s → 2s 最小（更多减速转换样本）
+# 3) heading_run: -5 保持
+```
+
+**Bug 根因**：原 `run_scale = clamp(fwd_vel - 1, 0, 1)`。当 cmd 从 3 m/s 突降到 0，但 fwd_vel 还没降下来（惯性），`run_scale` 仍 ~1 → 继续按"跑步"惩罚侧移/转向，而此时策略正试图停下，两类奖励打架 → 减速失败。
+
+**改用 cmd_vel** 后：cmd 一降，run_scale 立即归零，stand_scale 立即接管，策略直接进入站立模式。减速变干净。
+
+**Phase 4 final（`8548271`）**：回退 abs heading 尝试，仅保 cos + -5（避免 abs 叠加 cos 的双重惩罚）。
+
+**Eval（`e4689ba` +20k ramp 模式）**：减速干净，无超调。但 heading_cos 还是 ~0.972。
+
+### 17.3 Phase 4+：heading 切绝对角度公式（commit `200e19d`）
+
+**问题**：cos 公式在小 yaw 处梯度消失：
+```
+d/dθ (1 - cos θ) = sin θ → θ=7° 时梯度只 0.12
+d/dθ |θ|         = sign(θ) → 任何 θ 都是 ±1（14× 大）
+```
+→ 小 yaw 偏差下 cos 公式无推力，这就是 7° plateau 的数学根源。
+
+**改动**：
+```python
+# 原
+rew_heading = self.cfg.rew_heading_run * run_scale * (1.0 - heading_cos)
+# 新（Phase 4+）
+rew_heading = self.cfg.rew_heading_run * run_scale * torch.abs(yaw_angle)
+```
+
+**⚠️ 警告**：abs 公式梯度大 14×，系数必须同时降。Phase 4+ 用 `-0.5` 系数（不是 -5）→ 等效 penalty 量级。
+
+**结果**：未记录独立 metrics。Phase 5 很快覆盖。
+
+### 17.4 Phase 5：heading cos -5→-10 最终冲刺（commit `5bd48b7`）
+
+**决策**：放弃 abs 路线（风险高），改回 cos 公式但系数翻倍。
+
+**改动**：
+```python
+rew_heading_run: float = -5.0 → -10.0   # cos 公式，压力 ×2
+```
+从 Phase 4 最后 checkpoint 续训（不重训）。
+
+**训练目录**：`logs/skrl/g1_amp_run/2026-04-16_19-53-44_amp_torch/checkpoints/`
+
+**续训 5-15k 步指标**（爆发式进步）：
+
+| 指标 | 起点 | 5k 后 | 15k 后 |
+|------|------|-------|--------|
+| `ep mean`（步数） | 61 | 103 | 186（峰值 1199 = 24s 满格） |
+| `fwd_vel`（cmd ~1.0） | 0.61 | 0.78 | 0.97 |
+| `pelvis_height` | 0.688 | 0.692 | 0.698（向 0.72 爬升） |
+| `rew_base_height_run` | -0.097 | -0.072 | -0.055（自然缩小） |
+| `heading_cos` | 0.951 | 0.965 | 0.9742（7° yaw 仍在） |
+
+**奖励分解 @15k 续训**：
+```
+rew_velocity    +0.94
+rew_upright     +0.98
+rew_heading_run -0.23
+rew_base_height -0.055
+其余惩罚        -1.2
+────────────────
+total           ~ +1.9 / step（稳定正值）
+```
+
+### 17.5 Phase 5 关键洞察
+
+1. **squat-cheat 彻底消除**：移除 `run_scale` 门控是关键，不是加强 height 系数。系数从 -3 → -10 只是放大惩罚，但如果门控还在、仍有低速蹲的温床，再大系数都无用。
+2. **减速 bug 源于 scale 基准选错**：任何"基于实际状态"的 scale 都会和"命令"撕裂。改用 cmd_vel 是对的。
+3. **cos 公式的梯度消失**是数学事实（sin θ → 0 at θ → 0），大系数只是治标。切 abs 是治本但高风险（易震荡）。最终选择高系数 cos 是务实折衷。
+4. **续训价值**：Phase 4 → 5 用续训，短短 15k 步就看出新公式是否有效。重训要 40k+ 才到 Phase 4 末态，浪费算力。
+
+### 17.6 当前状态（2026-04-16 21:40）
+
+- Phase 5 训练进行中，未中断
+- heading 仍是 Phase 5 的主攻方向，目标 `heading_cos` 突破 0.99
+- 次要目标：`pelvis_height` 稳定 ≥ 0.72（参考 mean）
+- 没开始高速（cmd 3-4 m/s）验证，等 cmd=1 稳定后再推
+
+### 17.7 关键环境约定（从 session 3b1a7349 提炼）
+
+- **不要用 `best_agent.pt` 续训**：best 按 eval return 选，可能落后于当前训练状态；`agent_<iter>.pt` 精确对应某一步。
+- **pelvis_height 是作弊哨兵**：任何 ≥3 cm 下跌（无论训练步数）都是新作弊路径被发现 → 立即停训，不要等自然回升。
+- **TB per-term 奖励日志已启用**（commit `fb4923a`）：`Reward/rew_velocity`、`Reward/rew_base_height_run` 等都独立写入 TB，监控重点在"哪项惩罚/奖励在主导梯度"，而非仅看 total_reward。
+- **grad_penalty 已回退到 5.0**（commit `99ec0bb`）：Phase 4 曾短暂降到 3.0 以释放判别器压力，但训练变不稳 → 回退。
+
+### 17.8 后续计划（待做）
+
+1. Phase 5 续训到 heading_cos > 0.99（预计 50k-100k 步）
+2. 验证 pelvis_height 稳定 ≥ 0.72（参考 mean）
+3. Eval ramp 模式（cmd 0→1→2→3→4→0），确认加减速干净
+4. sim2sim：export_policy.py → MuJoCo 验证
+5. 如 Phase 5 cos 仍卡 plateau，考虑 Phase 6 切 abs 公式（系数 -0.3 到 -0.5）
