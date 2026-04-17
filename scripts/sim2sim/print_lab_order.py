@@ -36,8 +36,24 @@ env = gym.make(TASK, cfg=cfg)
 log("Resetting env (spawn robot)...")
 env.reset()
 u = env.unwrapped
-log("Env ready. Dumping joint/body order:")
+log("Env ready. Dumping joint/body order + action scaling:")
 sys.stdout.flush()
+
+# Action scaling as used by _apply_action: target = offset + scale * action
+import torch  # noqa: E402
+soft = u.robot.data.soft_joint_pos_limits[0]  # (num_joints, 2)
+soft_lo = soft[:, 0].cpu().numpy()
+soft_hi = soft[:, 1].cpu().numpy()
+offset = (0.5 * (soft_hi + soft_lo))
+scale = (soft_hi - soft_lo)
+default_pos = u.robot.data.default_joint_pos[0].cpu().numpy()
+
+print("=== ACTION_OFFSET_AND_SCALE (one line per joint) ===", flush=True)
+print("# idx joint_name soft_lo soft_hi offset scale default_pos", flush=True)
+for i, n in enumerate(u.robot.data.joint_names):
+    print(f"{i}: {n} {soft_lo[i]:+.4f} {soft_hi[i]:+.4f} {offset[i]:+.4f} {scale[i]:.4f} {default_pos[i]:+.4f}", flush=True)
+print("=== END_ACTION_SCALE ===", flush=True)
+
 
 print("=== JOINT_NAMES (Isaac Lab action / joint_pos / joint_vel order) ===", flush=True)
 for i, n in enumerate(u.robot.data.joint_names):

@@ -69,17 +69,27 @@ class ObservationNormalizer:
 #  G1 Configuration (matches Isaac Lab exactly)
 # ============================================================
 
-# Joint names in Isaac Lab order (same as MuJoCo XML order)
+# Joint names in Isaac Lab's ArticulationData.joint_names order.
+# ⚠ Confirmed via scripts/sim2sim/print_lab_order.py on RunPod: Isaac Lab uses
+#   breadth-first-like ordering from pelvis, interleaving L/R/waist at each
+#   level — NOT the URDF / MuJoCo native order (which is L-leg, R-leg, waist,
+#   L-arm, R-arm). The policy outputs actions and reads joint_pos/joint_vel
+#   in THIS order; if sim2sim uses the URDF order the action vector gets
+#   scrambled (leg targets applied to arms, etc.) and the robot collapses.
 JOINT_NAMES = [
-    "left_hip_pitch_joint", "left_hip_roll_joint", "left_hip_yaw_joint",
-    "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
-    "right_hip_pitch_joint", "right_hip_roll_joint", "right_hip_yaw_joint",
-    "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint",
-    "waist_yaw_joint", "waist_roll_joint", "waist_pitch_joint",
-    "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint",
-    "left_elbow_joint", "left_wrist_roll_joint", "left_wrist_pitch_joint", "left_wrist_yaw_joint",
-    "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
-    "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
+    "left_hip_pitch_joint",    "right_hip_pitch_joint",    "waist_yaw_joint",        # 0-2
+    "left_hip_roll_joint",     "right_hip_roll_joint",     "waist_roll_joint",       # 3-5
+    "left_hip_yaw_joint",      "right_hip_yaw_joint",      "waist_pitch_joint",      # 6-8
+    "left_knee_joint",         "right_knee_joint",                                   # 9-10
+    "left_shoulder_pitch_joint","right_shoulder_pitch_joint",                        # 11-12
+    "left_ankle_pitch_joint",  "right_ankle_pitch_joint",                            # 13-14
+    "left_shoulder_roll_joint","right_shoulder_roll_joint",                          # 15-16
+    "left_ankle_roll_joint",   "right_ankle_roll_joint",                             # 17-18
+    "left_shoulder_yaw_joint", "right_shoulder_yaw_joint",                           # 19-20
+    "left_elbow_joint",        "right_elbow_joint",                                  # 21-22
+    "left_wrist_roll_joint",   "right_wrist_roll_joint",                             # 23-24
+    "left_wrist_pitch_joint",  "right_wrist_pitch_joint",                            # 25-26
+    "left_wrist_yaw_joint",    "right_wrist_yaw_joint",                              # 27-28
 ]
 
 # Key body names for observation (13 bodies).
@@ -402,6 +412,8 @@ def main():
                         help="Output dir for video+csv (default: <policy_dir>/sim2sim/)")
     parser.add_argument("--physics_dt", type=float, default=0.002,
                         help="MuJoCo physics timestep (s). Substeps per policy step = (1/60)/physics_dt.")
+    parser.add_argument("--debug_steps", type=int, default=0,
+                        help="Print obs/action stats for first N control steps (0 = disabled).")
     args = parser.parse_args()
     control_dt = 1.0 / 60.0
     physics_substeps = max(1, int(round(control_dt / args.physics_dt)))
@@ -591,6 +603,22 @@ def main():
         target_pos = action_offset + action_scale * action
         for i in range(len(joint_qpos_ids)):
             data.ctrl[i] = target_pos[i]
+
+        # --- Debug: print obs/action stats for first N steps ---
+        if step < args.debug_steps:
+            obs_np_arr = obs.squeeze(0).numpy()
+            cur_qpos = np.array([data.qpos[j] for j in joint_qpos_ids])
+            print(f"\n--- step {step} debug ---")
+            print(f"  obs[0:5] joint_pos head: {obs_np[0:5]}")
+            print(f"  obs[100:109] tail (vel_b + cmd): {obs_np[100:109]}")
+            print(f"  obs_norm[0:5]: {obs_np_arr[0:5]}")
+            print(f"  obs_norm[100:109]: {obs_np_arr[100:109]}")
+            print(f"  action[:8]: {action[:8]}")
+            print(f"  action  min/max/mean: {action.min():.3f}/{action.max():.3f}/{action.mean():.3f}")
+            print(f"  target  min/max/mean: {target_pos.min():.3f}/{target_pos.max():.3f}/{target_pos.mean():.3f}")
+            print(f"  qpos    min/max: {cur_qpos.min():.3f}/{cur_qpos.max():.3f}")
+            print(f"  offset[:5]: {action_offset[:5]}")
+            print(f"  scale [:5]: {action_scale[:5]}")
 
         # --- Step physics (substep to decouple physics dt from control dt) ---
         for _ in range(physics_substeps):
