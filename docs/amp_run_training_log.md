@@ -1213,11 +1213,22 @@ Run 7 (2026-04-16) — 高度锁死修复 + yaw 纠正
 
 ---
 
-## 17. Phase 3/4/5 — Squat-Cheat 修复 + Yaw Plateau 攻关（2026-04-16）
+## 17. Run 7 Phase 4–7 — Squat-Cheat 修复后的后续迭代（2026-04-16）
 
-承接 Run 7 Fix 2（heading_run -1→-3）。此阶段进入多轮快速迭代，每轮聚焦一个问题 → 小改 → eval → 再改。
+承接 Run 7 Phase 3（§15.7 heading_run -1→-3）。此阶段进入多轮快速迭代。
 
-### 17.1 Phase 3：推高速 + 继续攻 yaw（commit `78c3922`）
+> **⚠️ 命名注意**：commit message 里把这几个阶段叫 "Phase 3/4/4+/5"（从本次改动序列重新起编号）。
+> 本文档和 `outputs/` 文件名按**时间顺序**统一编为 Run 7 **Phase 4/5/6/7**（接续 §15 的 Phase 1/2/3）。
+> 文件名 ↔ commit 名对照：
+>
+> | Commit "Phase X" | 文档 & 文件名 | 章节 |
+> |------------------|--------------|------|
+> | Phase 3 | **Phase 4** | §17.1 |
+> | Phase 4 | **Phase 5** | §17.2 |
+> | Phase 4+ | **Phase 6** | §17.3 |
+> | Phase 5 | **Phase 7** | §17.4 |
+
+### 17.1 Phase 4：推高速 + 继续攻 yaw（commit `78c3922`，commit 原叫 "Phase 3"）
 
 **改动**：
 ```python
@@ -1234,7 +1245,7 @@ rew_heading_run:   -3 → -5      # 再 ×1.67，cos 公式（未切 abs）
 
 **诊断**：yaw plateau 靠 cos 公式的小系数加压打不破；减速阶段(cmd 从高→低)策略来不及减速 → 冲出 episode 边界或速度超调。
 
-### 17.2 Phase 4：cmd_vel gating 修减速 bug（commits `9adcc69`, `8548271`）
+### 17.2 Phase 5：cmd_vel gating 修减速 bug（commits `9adcc69`, `8548271`，commit 原叫 "Phase 4"）
 
 **Phase 4 改动链（`9adcc69`）**：
 ```python
@@ -1254,7 +1265,7 @@ stand_scale = clamp(1.0 - cmd_vel, 0.0, 1.0)
 
 **Eval（`e4689ba` +20k ramp 模式）**：减速干净，无超调。但 heading_cos 还是 ~0.972。
 
-### 17.3 Phase 4+：heading 切绝对角度公式（commit `200e19d`）
+### 17.3 Phase 6：heading 切绝对角度公式（commit `200e19d`，commit 原叫 "Phase 4+"）
 
 **问题**：cos 公式在小 yaw 处梯度消失：
 ```
@@ -1275,7 +1286,7 @@ rew_heading = self.cfg.rew_heading_run * run_scale * torch.abs(yaw_angle)
 
 **结果**：未记录独立 metrics。Phase 5 很快覆盖。
 
-### 17.4 Phase 5：heading cos -5→-10 最终冲刺（commit `5bd48b7`）
+### 17.4 Phase 7：heading cos -5→-10 最终冲刺（commit `5bd48b7`，commit 原叫 "Phase 5"）
 
 **决策**：放弃 abs 路线（风险高），改回 cos 公式但系数翻倍。
 
@@ -1308,31 +1319,75 @@ rew_base_height -0.055
 total           ~ +1.9 / step（稳定正值）
 ```
 
-### 17.5 Phase 5 关键洞察
+### 17.5 Phase 7 关键洞察
 
 1. **squat-cheat 彻底消除**：移除 `run_scale` 门控是关键，不是加强 height 系数。系数从 -3 → -10 只是放大惩罚，但如果门控还在、仍有低速蹲的温床，再大系数都无用。
 2. **减速 bug 源于 scale 基准选错**：任何"基于实际状态"的 scale 都会和"命令"撕裂。改用 cmd_vel 是对的。
 3. **cos 公式的梯度消失**是数学事实（sin θ → 0 at θ → 0），大系数只是治标。切 abs 是治本但高风险（易震荡）。最终选择高系数 cos 是务实折衷。
 4. **续训价值**：Phase 4 → 5 用续训，短短 15k 步就看出新公式是否有效。重训要 40k+ 才到 Phase 4 末态，浪费算力。
 
-### 17.6 当前状态（2026-04-16 21:40）
+### 17.6 Phase 7 Eval 结果（2026-04-17 agent_20000）
 
-- Phase 5 训练进行中，未中断
-- heading 仍是 Phase 5 的主攻方向，目标 `heading_cos` 突破 0.99
-- 次要目标：`pelvis_height` 稳定 ≥ 0.72（参考 mean）
-- 没开始高速（cmd 3-4 m/s）验证，等 cmd=1 稳定后再推
+Eval 模式 `--cmd_vel ramp`（4 m/s × 15s → 0 m/s × 5s），num_envs=1, 无 domain random。
 
-### 17.7 关键环境约定（从 session 3b1a7349 提炼）
+**分段统计**（CSV 1200 行）：
+
+| 阶段 | 时长 | cmd | fwd_vel | 跟踪误差 | lat std | pelvis | reward/step |
+|-----|------|-----|---------|---------|---------|--------|-------------|
+| Startup (0–1s) | 1s | 4.0 | 0.22 ±0.15 | 3.78 | 0.06 | 0.77 | 0.43 |
+| **Cruise (2–14s)** | 12s | 4.0 | **3.99 ±0.056** | **0.043** | 0.16 | 0.69 | 1.39 |
+| Decel (14.5–16s) | 1.5s | 0→4 混 | 2.40 ±1.48 | 1.13 | 0.30 | 0.68 (min 0.611) | 0.12 |
+| Stop (16–20s) | 4s | 0.0 | 0.06 ±0.10 | 0.065 | 0.08 | 0.74 | 2.22 |
+
+**Total reward: 1617.2 / 1200 steps**
+
+**成功**：
+1. Cruise 段 4 m/s 跟踪误差 **0.043 m/s**（近乎完美）
+2. 无深蹲作弊（pelvis 稳 0.69m，停下回 0.74m）
+3. 20s 全程不摔倒，最后 4s 完美站立
+
+**视频观察**（10 帧 + CSV 积分验证）：
+
+| 时段 | 累积侧向位移 | 现象 |
+|------|------------|------|
+| 2–8s | +0.11m | 稳 |
+| **8–12s** | **+0.29m (加剧)** | **侧向漂移严重**（用户观察确认） |
+| 12–14s | +0.10m | 减缓 |
+| Decel (14.5–16s) | +0.23m (1 次大震荡) | **超调 + 摇摆 + pelvis 瞬降 10cm** |
+| Stop (16–20s) | +0.32m (残余惯性) | 震荡后 0.5s 内恢复，之后完美 |
+
+**关键失稳瞬间**（t=15.1–15.5s）：
+- fwd_vel 过冲到 4.22 m/s 后骤降 1.96
+- lat_vel 从 -0.17 跳到 +0.96
+- pelvis_height 最低 0.611 m
+- reward 连续 5 帧 < 0（min -1.79）
+
+**问题清单**：
+1. 8-12s 侧向漂移（总偏移 0.49m/12s）— 策略无位置反馈，只有速度奖励
+2. 减速阶跃 cmd 4→0 触发单次严重震荡（惯性无法瞬间吸收）
+3. 启动慢（~2s 才到 4 m/s）
+4. 手臂不摆（参考数据 subject1 如此，判别器锁定）
+5. 停止姿态宽腿叉开而非自然站立
+
+### 17.7 关键环境约定（从 session 3b1a7349 提炼）- Phase 7 策略 ckpt 归档位置：`outputs/run7_phase7_latest_20k/checkpoints/agent_20000.pt`
+- eval 视频/CSV：`outputs/run7_phase7_latest_20k/videos/curated_agent20k/ramp.{mp4,csv}`
+- 帧提取：`outputs/run7_phase7_latest_20k/videos/curated_agent20k/frames/t*.jpg`
 
 - **不要用 `best_agent.pt` 续训**：best 按 eval return 选，可能落后于当前训练状态；`agent_<iter>.pt` 精确对应某一步。
 - **pelvis_height 是作弊哨兵**：任何 ≥3 cm 下跌（无论训练步数）都是新作弊路径被发现 → 立即停训，不要等自然回升。
 - **TB per-term 奖励日志已启用**（commit `fb4923a`）：`Reward/rew_velocity`、`Reward/rew_base_height_run` 等都独立写入 TB，监控重点在"哪项惩罚/奖励在主导梯度"，而非仅看 total_reward。
 - **grad_penalty 已回退到 5.0**（commit `99ec0bb`）：Phase 4 曾短暂降到 3.0 以释放判别器压力，但训练变不稳 → 回退。
 
-### 17.8 后续计划（待做）
+### 17.8 后续计划（基于 Phase 7 eval 问题，按优先级）
 
-1. Phase 5 续训到 heading_cos > 0.99（预计 50k-100k 步）
-2. 验证 pelvis_height 稳定 ≥ 0.72（参考 mean）
-3. Eval ramp 模式（cmd 0→1→2→3→4→0），确认加减速干净
-4. sim2sim：export_policy.py → MuJoCo 验证
-5. 如 Phase 5 cos 仍卡 plateau，考虑 Phase 6 切 abs 公式（系数 -0.3 到 -0.5）
+**P1 减速震荡修复**：把 ramp 的 cmd 变化从阶跃（4→0）改成斜坡（4→3→2→1→0 每段 0.3s），给策略 reaction time。或训练时 cmd_vel 的切换也加平滑（line filter）。
+
+**P2 侧向位置惩罚**：8-12s 侧向累积位移 0.29m 说明策略只有速度反馈（`rew_lateral_vel`），没有位置反馈。加入对累积 lateral_pos 的惩罚项。
+
+**P3 手臂摆动**：加轻度模仿奖励（上身 joint_pos 误差）→ 只惩罚参考数据里确有摆动的关节。若参考 subject1 也不摆，改用其他参考。
+
+**P4 站立姿态收拢**：`rew_yaw_rate_stand` 从 -0.3 加到 -0.6；可考虑加 `rew_joint_default` 惩罚偏离默认姿势。
+
+**P5 Phase 7 续训**：从 agent_20000 继续训到 100k+ 看 heading_cos 能否 > 0.995 且 pelvis ≥ 0.72。
+
+**P6 sim2sim**：Phase 7 策略导出 ONNX → 本地 MuJoCo 验证 sim-to-sim gap。
