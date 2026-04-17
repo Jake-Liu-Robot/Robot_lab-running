@@ -310,9 +310,10 @@ class G1AmpRunEnv(G1AmpEnv):
 
         # ================= RUNNING rewards (scale with run_scale) =========
 
-        # 5) heading — face world +X (small-angle correction signal)
-        #    Provides gradient where velocity_tracking is flat (cos(θ) ≈ 1 for small θ)
-        rew_heading = self.cfg.rew_heading_run * run_scale * (1.0 - heading_cos)
+        # 5) heading — face world +X using absolute angle (non-vanishing gradient at small θ)
+        #    Linear in |θ| so gradient stays constant as yaw → 0 (unlike (1-cos) which vanishes)
+        yaw_err = torch.acos(torch.clamp(heading_cos, -0.999, 0.999))
+        rew_heading = self.cfg.rew_heading_run * run_scale * yaw_err
 
         # 6) lateral velocity (body frame) — prevent crab-walking
         rew_lateral_vel = self.cfg.rew_lateral_vel_run * run_scale * torch.square(lateral_vel_body)
