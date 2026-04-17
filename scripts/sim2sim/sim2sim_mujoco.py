@@ -20,6 +20,7 @@ REQUIREMENTS:
 """
 
 import argparse
+import os
 import time
 
 import mujoco
@@ -60,7 +61,8 @@ class ObservationNormalizer:
         self.clip = clip
 
     def normalize(self, obs):
-        return torch.clamp((obs - self.mean) / torch.sqrt(self.var + 1e-8), -self.clip, self.clip)
+        normed = (obs - self.mean) / torch.sqrt(self.var + 1e-8)
+        return torch.clamp(normed, -self.clip, self.clip).float()
 
 
 # ============================================================
@@ -80,7 +82,13 @@ JOINT_NAMES = [
     "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
 ]
 
-# Key body names for observation (13 bodies)
+# Key body names for observation (13 bodies).
+# ⚠ URDF-only bodies that MJCF merges via fixed joint must be remapped to the
+#    MJCF parent + the URDF offset, else `mj_name2id` returns -1 and xpos[-1]
+#    silently feeds garbage into the policy.
+# rubber_hand (fixed to wrist_yaw_link) offset from g1_29dof_rev_1_0.urdf:
+#   left_hand_palm_joint:  xyz="0.0415  0.003 0"
+#   right_hand_palm_joint: xyz="0.0415 -0.003 0"
 KEY_BODY_NAMES = [
     "left_shoulder_yaw_link", "right_shoulder_yaw_link",
     "left_elbow_link", "right_elbow_link",
@@ -91,7 +99,33 @@ KEY_BODY_NAMES = [
     "right_knee_link", "left_knee_link",
 ]
 
+# body_name → (MJCF parent body, local offset in parent frame) for URDF-only bodies
+#   that MJCF merges via fixed joints.
+KEY_BODY_REMAP = {
+    "left_rubber_hand":  ("left_wrist_yaw_link",  np.array([0.0415,  0.003, 0.0])),
+    "right_rubber_hand": ("right_wrist_yaw_link", np.array([0.0415, -0.003, 0.0])),
+}
+
 REF_BODY_NAME = "pelvis"
+
+# Soft joint position limit factor (from unitree.py UNITREE_G1_29DOF_CFG).
+# Isaac Lab's action_offset/action_scale uses soft limits = factor × hard range.
+SOFT_JOINT_POS_LIMIT_FACTOR = 0.9
+
+# Initial state at reset (from unitree.py UNITREE_G1_29DOF_CFG.init_state).
+# reset_strategy="default" in g1_amp_run_env_cfg.py, so lab eval starts here.
+INIT_PELVIS_HEIGHT = 0.76
+INIT_JOINT_POS = {
+    "left_hip_pitch_joint": -0.312, "right_hip_pitch_joint": -0.312,
+    "left_knee_joint": 0.669, "right_knee_joint": 0.669,
+    "left_ankle_pitch_joint": -0.363, "right_ankle_pitch_joint": -0.363,
+    "left_elbow_joint": 0.6, "right_elbow_joint": 0.6,
+    "left_shoulder_roll_joint": 0.2, "left_shoulder_pitch_joint": 0.2,
+    "right_shoulder_roll_joint": -0.2, "right_shoulder_pitch_joint": 0.2,
+}
+
+# Early-termination height from g1_amp_run_env_cfg.py (lab terminates below this).
+TERMINATION_HEIGHT = 0.45
 
 # PD gains per joint (from unitree.py)
 # Format: {joint_name: (stiffness, damping)}
@@ -126,7 +160,8 @@ for jn in ["left_wrist_pitch_joint", "right_wrist_pitch_joint",
 #  MuJoCo Model Setup
 # ============================================================
 
-def setup_mujoco_model(xml_path):
+def setup_mujoco_model(xml_path, offwidth=1280, offheight=720,
+                       physics_timestep=0.002, integrator="implicitfast"):
     """Load MuJoCo model and add PD actuators."""
     # Load XML and modify to add actuators
     with open(xml_path, "r") as f:
@@ -147,6 +182,38 @@ def setup_mujoco_model(xml_path):
     # Replace empty actuator section
     xml_content = xml_content.replace("  <actuator>\n  </actuator>", actuator_xml)
 
+    # Inject/override <option> with implicit integrator + small timestep so the
+    # stiff PD controllers don't blow up (PhysX in Isaac Lab substeps internally;
+    # MuJoCo defaults to Euler + 2ms but we get 1/60 after the override below).
+    option_block = (
+        f'  <option timestep="{physics_timestep}" integrator="{integrator}"/>\n'
+    )
+    if "<option" in xml_content:
+        import re
+        xml_content = re.sub(r"<option[^/>]*/>", option_block.strip(), xml_content, count=1)
+    else:
+        xml_content = xml_content.replace(
+            "<compiler", option_block + "  <compiler", 1
+        )
+
+    # Ensure offscreen framebuffer is large enough for HD video.
+    # MuJoCo only allows one <global> element inside <visual>; if one already
+    # exists (e.g. Unitree G1 XML has azimuth/elevation there), add the offwidth
+    # /offheight attributes into it rather than inserting a second element.
+    import re
+    global_pat = re.compile(r"<global([^/>]*)/>")
+    m = global_pat.search(xml_content)
+    if m:
+        attrs = m.group(1)
+        if "offwidth" not in attrs:
+            attrs = f'{attrs} offwidth="{offwidth}" offheight="{offheight}"'
+            xml_content = xml_content[: m.start()] + f"<global{attrs}/>" + xml_content[m.end():]
+    else:
+        visual_block = (
+            f'  <visual>\n    <global offwidth="{offwidth}" offheight="{offheight}"/>\n  </visual>\n'
+        )
+        xml_content = xml_content.replace("<worldbody>", visual_block + "  <worldbody>", 1)
+
     # Write modified XML to temp file (same directory for mesh resolution)
     import os
     import tempfile
@@ -158,15 +225,39 @@ def setup_mujoco_model(xml_path):
     os.remove(tmp_xml)
     data = mujoco.MjData(model)
 
-    # Set simulation timestep to match Isaac Lab (1/60 s)
-    model.opt.timestep = 1.0 / 60.0
-
+    # timestep/integrator already set via XML <option>. Leave as-is.
     return model, data, xml_content
 
 
 def get_body_id(model, name):
-    """Get MuJoCo body ID by name."""
-    return mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name)
+    """Get MuJoCo body ID by name. Raises if not found — mj_name2id returns -1
+    silently, which indexes the last body and produces silent garbage."""
+    bid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_BODY, name)
+    if bid < 0:
+        raise ValueError(f"Body '{name}' not found in MuJoCo model")
+    return bid
+
+
+def resolve_key_body(model, name):
+    """Return (body_id, local_offset) for a URDF-named key body.
+
+    For bodies that MJCF merges via fixed joint (e.g. rubber_hand), look up the
+    MJCF parent and include the URDF offset so the world-frame point matches
+    Isaac Lab's body_pos_w[rubber_hand].
+    """
+    if name in KEY_BODY_REMAP:
+        parent, offset = KEY_BODY_REMAP[name]
+        return get_body_id(model, parent), offset.astype(np.float64)
+    return get_body_id(model, name), np.zeros(3, dtype=np.float64)
+
+
+def key_body_world_pos(data, body_id, local_offset):
+    """World position of a point rigidly attached to body_id at local_offset."""
+    if np.all(local_offset == 0.0):
+        return data.xpos[body_id].copy()
+    # data.xmat is row-major rotation matrix; shape (nbody, 9)
+    R = data.xmat[body_id].reshape(3, 3)
+    return data.xpos[body_id] + R @ local_offset
 
 
 def get_joint_ids(model, joint_names):
@@ -202,7 +293,7 @@ def quaternion_to_tangent_and_normal(quat_wxyz):
 
 
 def compute_observation(model, data, joint_qpos_ids, joint_qvel_ids,
-                        ref_body_id, key_body_ids, cmd_vel, progress):
+                        ref_body_id, key_bodies, cmd_vel, progress):
     """Compute 109-dim policy observation from MuJoCo state.
 
     Structure:
@@ -225,12 +316,13 @@ def compute_observation(model, data, joint_qpos_ids, joint_qvel_ids,
     # Root orientation → tangent + normal (6-dim)
     root_tangent_normal = quaternion_to_tangent_and_normal(root_quat_wxyz).astype(np.float32)
 
-    # Key body positions relative to root (13×3 = 39-dim)
+    # Key body positions relative to root (13×3 = 39-dim).
+    # key_bodies is list[(body_id, local_offset)] — offset supports rubber_hand
+    # points that MJCF merged into wrist_yaw_link.
     key_body_rel = []
-    for bid in key_body_ids:
-        body_pos = data.xpos[bid].copy()
-        rel_pos = body_pos - root_pos
-        key_body_rel.append(rel_pos)
+    for bid, offset in key_bodies:
+        body_pos = key_body_world_pos(data, bid, offset)
+        key_body_rel.append(body_pos - root_pos)
     key_body_rel = np.concatenate(key_body_rel).astype(np.float32)  # 39-dim
 
     # Progress (1-dim)
@@ -242,9 +334,12 @@ def compute_observation(model, data, joint_qpos_ids, joint_qvel_ids,
         root_tangent_normal, key_body_rel, progress_arr
     ])
 
-    # Root velocity in body frame (3-dim)
-    # MuJoCo: cvel[ref_body] gives [angular(3), linear(3)] in world frame
-    root_vel_world = data.cvel[ref_body_id][3:6].copy()  # linear velocity
+    # Root velocity in body frame (3-dim).
+    # Match Isaac Lab's body_lin_vel_w[pelvis] (body link origin velocity in world
+    # frame). For a free joint, MuJoCo's qvel[0:3] is exactly that — linear velocity
+    # of the body origin in the world frame. data.cvel[body][3:6] would give COM
+    # velocity instead, which differs by omega × r_com for dynamic motion.
+    root_vel_world = data.qvel[0:3].copy()
     # Rotate world velocity to body frame using inverse quaternion
     # For [w,x,y,z]: inverse = [w,-x,-y,-z] (for unit quat)
     quat_inv = np.array([root_quat_wxyz[0], -root_quat_wxyz[1],
@@ -299,8 +394,17 @@ def main():
     parser.add_argument("--cmd_vel", type=str, default="4.0",
                         help="Velocity command: float or 'ramp'")
     parser.add_argument("--duration", type=float, default=20.0, help="Simulation duration (seconds)")
-    parser.add_argument("--no_render", action="store_true", help="Disable visualization")
+    parser.add_argument("--no_render", action="store_true", help="Disable interactive viewer")
+    parser.add_argument("--no_video", action="store_true", help="Disable offscreen video recording")
+    parser.add_argument("--video_width", type=int, default=1280)
+    parser.add_argument("--video_height", type=int, default=720)
+    parser.add_argument("--output_dir", type=str, default=None,
+                        help="Output dir for video+csv (default: <policy_dir>/sim2sim/)")
+    parser.add_argument("--physics_dt", type=float, default=0.002,
+                        help="MuJoCo physics timestep (s). Substeps per policy step = (1/60)/physics_dt.")
     args = parser.parse_args()
+    control_dt = 1.0 / 60.0
+    physics_substeps = max(1, int(round(control_dt / args.physics_dt)))
 
     # --- Parse cmd_vel ---
     cmd_vel_mode = args.cmd_vel
@@ -322,23 +426,29 @@ def main():
     # Load weights (need to map skrl key names to our network)
     state_dict = {}
     policy_state = export["policy_state"]
-    # skrl naming: "policy_net_0.weight" → our "net.0.weight"
-    # net structure: Linear(109,1024), ReLU, Linear(1024,512), ReLU, Linear(512,29)
-    # skrl indices:  net_0           ,     , net_2           ,     , net_4
-    # our indices:   net.0           , net.1, net.2           , net.3, net.4
-    key_mapping = {
-        "policy_net_0.weight": "net.0.weight",
-        "policy_net_0.bias": "net.0.bias",
-        "policy_net_2.weight": "net.2.weight",
-        "policy_net_2.bias": "net.2.bias",
-        "policy_net_4.weight": "net.4.weight",
-        "policy_net_4.bias": "net.4.bias",
-    }
-    for skrl_key, our_key in key_mapping.items():
-        if skrl_key in policy_state:
-            state_dict[our_key] = policy_state[skrl_key]
-        else:
-            print(f"  [WARN] Key {skrl_key} not found in checkpoint")
+    # skrl layouts seen:
+    #   legacy: policy_net_0.weight / policy_net_0.bias / ... policy_net_4.*
+    #   newer:  policy_net_container.0.weight / ... policy_net_container.4.*
+    # our target: net.0.*, net.2.*, net.4.*
+    def _find_key(policy_state, layer_idx, suffix):
+        candidates = [
+            f"policy_net_{layer_idx}.{suffix}",
+            f"policy_net_container.{layer_idx}.{suffix}",
+            f"policy.net.{layer_idx}.{suffix}",
+            f"policy.net_container.{layer_idx}.{suffix}",
+        ]
+        for c in candidates:
+            if c in policy_state:
+                return c
+        return None
+
+    for layer_idx in (0, 2, 4):
+        for suffix in ("weight", "bias"):
+            src = _find_key(policy_state, layer_idx, suffix)
+            if src is None:
+                print(f"  [WARN] No match for layer {layer_idx} {suffix}")
+                continue
+            state_dict[f"net.{layer_idx}.{suffix}"] = policy_state[src]
 
     policy.load_state_dict(state_dict)
     policy.eval()
@@ -358,72 +468,114 @@ def main():
 
     # --- Setup MuJoCo ---
     print(f"[INFO] Loading MuJoCo model: {args.xml_path}")
-    model, data, xml_str = setup_mujoco_model(args.xml_path)
+    model, data, xml_str = setup_mujoco_model(
+        args.xml_path, offwidth=args.video_width, offheight=args.video_height,
+        physics_timestep=args.physics_dt,
+    )
+    print(f"  Physics: dt={model.opt.timestep:.4f}s integrator={model.opt.integrator} "
+          f"substeps/control={physics_substeps}")
 
-    # Get IDs
+    # Get IDs. For merged URDF-only bodies (rubber_hand), also resolve local offset.
     ref_body_id = get_body_id(model, REF_BODY_NAME)
-    key_body_ids = [get_body_id(model, name) for name in KEY_BODY_NAMES]
+    key_bodies = [resolve_key_body(model, name) for name in KEY_BODY_NAMES]
     joint_qpos_ids, joint_qvel_ids = get_joint_ids(model, JOINT_NAMES)
+    for name, (bid, offset) in zip(KEY_BODY_NAMES, key_bodies):
+        mj_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_BODY, bid)
+        if np.any(offset != 0.0):
+            print(f"  key body {name:24s} → MJCF {mj_name} + offset {tuple(offset)}")
 
     # Action scaling: prefer exported values from Isaac Lab, fallback to MuJoCo limits
+    # multiplied by soft_joint_pos_limit_factor (0.9 in unitree.py), which is what
+    # Isaac Lab actually uses via `self.robot.data.soft_joint_pos_limits`.
     if export.get("action_offset") is not None:
         action_offset = export["action_offset"].numpy()
         action_scale = export["action_scale"].numpy()
         print("  Action scaling: from Isaac Lab export")
     else:
         action_offset, action_scale = compute_action_scaling(model, joint_qpos_ids)
-        print("  Action scaling: from MuJoCo joint limits (fallback)")
+        action_scale = action_scale * SOFT_JOINT_POS_LIMIT_FACTOR
+        print(f"  Action scaling: from MuJoCo hard limits × soft factor "
+              f"({SOFT_JOINT_POS_LIMIT_FACTOR})")
     print(f"  Ref body: {REF_BODY_NAME} (id={ref_body_id})")
-    print(f"  Key bodies: {len(key_body_ids)}")
+    print(f"  Key bodies: {len(key_bodies)}")
     print(f"  Joints: {len(joint_qpos_ids)}")
 
-    # --- Reset to standing ---
+    # --- Reset to Isaac Lab default state (reset_strategy="default") ---
+    # unitree.py UNITREE_G1_29DOF_CFG.init_state: pos=(0,0,0.76) + specific joints.
     mujoco.mj_resetData(model, data)
     # Free joint: qpos[0:3]=pos, qpos[3:7]=quat(w,x,y,z)
-    data.qpos[2] = 0.75   # pelvis height
-    data.qpos[3] = 1.0    # quat w (upright)
-    # Joint angles: use keyframe if available, otherwise zeros (default URDF pose)
-    if model.nkey > 0:
-        mujoco.mj_resetDataKeyframe(model, data, 0)
-        data.qpos[2] = 0.75  # override height
+    data.qpos[0:3] = [0.0, 0.0, INIT_PELVIS_HEIGHT]
+    data.qpos[3:7] = [1.0, 0.0, 0.0, 0.0]
+    # Apply specific joint angles (all others stay at 0).
+    for jn, angle in INIT_JOINT_POS.items():
+        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn)
+        data.qpos[model.jnt_qposadr[jid]] = angle
+    # Zero all velocities.
+    data.qvel[:] = 0.0
     mujoco.mj_forward(model, data)
-    print(f"  Initial pelvis height: {data.xpos[ref_body_id][2]:.3f}m")
+    print(f"  Initial pelvis height: {data.xpos[ref_body_id][2]:.3f}m "
+          f"(target {INIT_PELVIS_HEIGHT})")
 
     # --- Simulation loop ---
-    dt = model.opt.timestep
+    dt = control_dt  # policy / log / video frequency
     total_steps = int(args.duration / dt)
-    print(f"\n[SIM] Running {total_steps} steps ({args.duration}s at {1/dt:.0f}Hz)")
+    print(f"\n[SIM] Running {total_steps} control steps ({args.duration}s at {1/dt:.0f}Hz), "
+          f"{physics_substeps} physics substeps/step")
     print(f"[SIM] Mode: {cmd_vel_mode}" + (f" = {fixed_vel} m/s" if cmd_vel_mode == "fixed" else ""))
-    print(f"{'step':>6} | {'time':>5} | {'cmd':>5} | {'fwd_vel':>8} | {'height':>6}")
-    print("-" * 50)
+    print(f"{'step':>6} | {'time':>5} | {'cmd':>5} | {'fwd_vel':>8} | {'lat':>6} | {'height':>6} | {'rew':>6}")
+    print("-" * 68)
 
-    # CSV log
-    csv_path = args.policy.replace(".pt", "_sim2sim.csv")
+    # --- Output paths (match eval_amp_run.py convention) ---
+    ckpt_name = os.path.splitext(os.path.basename(args.policy))[0]
+    if args.output_dir:
+        output_dir = args.output_dir
+    else:
+        output_dir = os.path.join(os.path.dirname(os.path.abspath(args.policy)), "sim2sim")
+    os.makedirs(output_dir, exist_ok=True)
+    csv_path = os.path.join(output_dir, f"sim2sim_{ckpt_name}_{cmd_vel_mode}.csv")
+    video_path = os.path.join(output_dir, f"sim2sim_{ckpt_name}_{cmd_vel_mode}.mp4")
+
     csv_file = open(csv_path, "w")
-    csv_file.write("step,time_s,cmd_vel,fwd_vel,pelvis_height\n")
+    csv_file.write("step,time_s,cmd_vel,fwd_vel,lateral_vel,pelvis_height,reward_step\n")
 
-    # Viewer
+    # --- Interactive viewer (optional) ---
     viewer = None
     if not args.no_render:
         viewer = mujoco.viewer.launch_passive(model, data)
 
+    # --- Offscreen video recorder ---
+    video_writer = None
+    renderer = None
+    if not args.no_video:
+        import imageio
+        renderer = mujoco.Renderer(model, height=args.video_height, width=args.video_width)
+        fps = int(round(1.0 / dt))
+        video_writer = imageio.get_writer(video_path, fps=fps, codec="libx264",
+                                          quality=7, macro_block_size=1)
+        print(f"[VIDEO] Recording to {video_path} ({args.video_width}x{args.video_height} @ {fps}fps)")
+
+        # Tracking camera (behind-and-above, matching eval_amp_run.py style)
+        cam = mujoco.MjvCamera()
+        cam.type = mujoco.mjtCamera.mjCAMERA_FREE
+        cam.distance = 4.5
+        cam.elevation = -20.0
+        cam.azimuth = 140.0
+
+    reward_sum = 0.0
     for step in range(total_steps):
         t = step * dt
 
         # --- Velocity command ---
         if cmd_vel_mode == "fixed":
             cmd_vel = fixed_vel
-        else:  # ramp
-            if t < 15.0:
-                cmd_vel = 4.0
-            else:
-                cmd_vel = 0.0
+        else:  # ramp — matches eval_amp_run.py: 4 m/s for 15s, 0 for 5s
+            cmd_vel = 4.0 if t < 15.0 else 0.0
 
         # --- Compute observation ---
         progress = t / args.duration
         obs_np = compute_observation(
             model, data, joint_qpos_ids, joint_qvel_ids,
-            ref_body_id, key_body_ids, cmd_vel, progress
+            ref_body_id, key_bodies, cmd_vel, progress
         )
         obs = torch.tensor(obs_np, dtype=torch.float32).unsqueeze(0)
 
@@ -437,40 +589,62 @@ def main():
 
         # --- Apply action (PD position control) ---
         target_pos = action_offset + action_scale * action
-        for i, qpos_id in enumerate(joint_qpos_ids):
-            # Find the actuator index for this joint
+        for i in range(len(joint_qpos_ids)):
             data.ctrl[i] = target_pos[i]
 
-        # --- Step physics ---
-        mujoco.mj_step(model, data)
+        # --- Step physics (substep to decouple physics dt from control dt) ---
+        for _ in range(physics_substeps):
+            mujoco.mj_step(model, data)
 
-        # --- Get forward velocity ---
+        # --- Extract state for logging (match lab: body_lin_vel_w world X as fwd_vel) ---
+        root_pos = data.xpos[ref_body_id].copy()
         root_quat = data.xquat[ref_body_id].copy()
-        root_vel_w = data.cvel[ref_body_id][3:6].copy()
+        root_vel_w = data.qvel[0:3].copy()  # world-frame linear velocity of pelvis
         quat_inv = np.array([root_quat[0], -root_quat[1], -root_quat[2], -root_quat[3]])
         root_vel_b = quat_apply(quat_inv, root_vel_w)
-        fwd_vel = root_vel_b[0]
-        pelvis_h = data.xpos[ref_body_id][2]
+        fwd_vel = float(root_vel_w[0])    # lab logs world X velocity as fwd_vel
+        lat_vel = float(root_vel_w[1])    # lab logs world Y as lateral_vel
+        pelvis_h = float(root_pos[2])
 
-        # --- Log ---
-        csv_file.write(f"{step},{t:.3f},{cmd_vel:.3f},{fwd_vel:.3f},{pelvis_h:.3f}\n")
+        # velocity-tracking reward (matches g1_amp_run_env.py: 1.5 * exp(-4 * err^2))
+        rew_vel = 1.5 * float(np.exp(-4.0 * (fwd_vel - cmd_vel) ** 2))
+        reward_sum += rew_vel
 
-        if (step + 1) % 60 == 0:
-            print(f"{step+1:>6} | {t:>5.1f} | {cmd_vel:>5.1f} | {fwd_vel:>8.2f} | {pelvis_h:>6.3f}")
+        csv_file.write(f"{step},{t:.3f},{cmd_vel:.3f},{fwd_vel:.3f},"
+                       f"{lat_vel:.3f},{pelvis_h:.3f},{rew_vel:.4f}\n")
 
-        # --- Update viewer ---
+        if (step + 1) % 60 == 0 or step == total_steps - 1:
+            print(f"{step+1:>6} | {t:>5.1f} | {cmd_vel:>5.1f} | {fwd_vel:>8.2f} | "
+                  f"{lat_vel:>6.2f} | {pelvis_h:>6.3f} | {rew_vel:>6.3f}")
+
+        # --- Write video frame (track robot) ---
+        if video_writer is not None:
+            cam.lookat[0] = root_pos[0]
+            cam.lookat[1] = root_pos[1]
+            cam.lookat[2] = max(0.5, root_pos[2])
+            renderer.update_scene(data, camera=cam)
+            frame = renderer.render()
+            video_writer.append_data(frame)
+
+        # --- Update interactive viewer ---
         if viewer and viewer.is_running():
             viewer.sync()
-            if not args.no_render:
-                time.sleep(max(0, dt - 0.001))  # rough real-time
+            time.sleep(max(0, dt - 0.001))
         elif viewer and not viewer.is_running():
             break
 
     csv_file.close()
-    print(f"\n[RESULT] CSV saved: {csv_path}")
-
+    if video_writer is not None:
+        video_writer.close()
+    if renderer is not None:
+        renderer.close()
     if viewer:
         viewer.close()
+
+    print(f"\n[RESULT] Total reward (velocity tracking): {reward_sum:.1f}")
+    print(f"[RESULT] CSV:   {csv_path}")
+    if not args.no_video:
+        print(f"[RESULT] Video: {video_path}")
 
 
 if __name__ == "__main__":
