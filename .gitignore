@@ -39,6 +39,11 @@ _build
 # LSP
 pyrightconfig.json
 
+# Claude Code local state
+.claude/
+MUJOCO_LOG.TXT
+*.log
+
 # Datasets - non-G1 data
 lafan1_g1/h1/
 lafan1_g1/h1_2/
