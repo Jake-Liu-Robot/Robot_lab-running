@@ -31,6 +31,13 @@ from isaaclab_tasks.utils import parse_env_cfg  # noqa: E402
 TASK = "RobotLab-Isaac-G1-AMP-Run-Direct-v0"
 log(f"Parsing env cfg for {TASK}...")
 cfg = parse_env_cfg(TASK, num_envs=1)
+# Match eval_amp_run.py: disable ALL domain randomization for a clean comparison.
+cfg.push_enable = False
+cfg.obs_noise_enable = False
+cfg.pd_gain_random_enable = False
+cfg.joint_pos_offset_enable = False
+cfg.added_mass_enable = False
+log("Domain randomization disabled (matches eval_amp_run.py).")
 log("Creating env...")
 env = gym.make(TASK, cfg=cfg)
 log("Resetting env (spawn robot)...")

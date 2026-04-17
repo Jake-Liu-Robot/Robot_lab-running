@@ -606,19 +606,18 @@ def main():
 
         # --- Debug: print obs/action stats for first N steps ---
         if step < args.debug_steps:
-            obs_np_arr = obs.squeeze(0).numpy()
             cur_qpos = np.array([data.qpos[j] for j in joint_qpos_ids])
-            print(f"\n--- step {step} debug ---")
-            print(f"  obs[0:5] joint_pos head: {obs_np[0:5]}")
-            print(f"  obs[100:109] tail (vel_b + cmd): {obs_np[100:109]}")
-            print(f"  obs_norm[0:5]: {obs_np_arr[0:5]}")
-            print(f"  obs_norm[100:109]: {obs_np_arr[100:109]}")
-            print(f"  action[:8]: {action[:8]}")
-            print(f"  action  min/max/mean: {action.min():.3f}/{action.max():.3f}/{action.mean():.3f}")
-            print(f"  target  min/max/mean: {target_pos.min():.3f}/{target_pos.max():.3f}/{target_pos.mean():.3f}")
-            print(f"  qpos    min/max: {cur_qpos.min():.3f}/{cur_qpos.max():.3f}")
-            print(f"  offset[:5]: {action_offset[:5]}")
-            print(f"  scale [:5]: {action_scale[:5]}")
+            print(f"\n=== SIM2SIM_STEP {step} h={data.xpos[ref_body_id][2]:.4f} cmd={cmd_vel:.3f} ===")
+            print("=== SIM2SIM_OBS (109-dim, pre-norm) ===")
+            for i, x in enumerate(obs_np):
+                print(f"obs[{i}]={x:+.6f}")
+            print("=== SIM2SIM_ACTION (29-dim, raw policy output) ===")
+            for i, x in enumerate(action):
+                print(f"act[{i}]={x:+.6f}")
+            print("=== SIM2SIM_TARGET (29-dim, PD target = offset + scale*action) ===")
+            for i, x in enumerate(target_pos):
+                print(f"tgt[{i}]={x:+.6f}")
+            print("=== END_SIM2SIM_STEP ===")
 
         # --- Step physics (substep to decouple physics dt from control dt) ---
         for _ in range(physics_substeps):
