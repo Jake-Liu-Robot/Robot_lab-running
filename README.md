@@ -55,7 +55,18 @@ Style-based imitation via a learned discriminator + velocity command tracking. T
 
 **Selected clip**: `run2_subject1.csv` frames 1943-2564 (20.7s full cycle)
 - Stand (0.8s) -> Accelerate -> Sustained running at 2-3.3 m/s (18s) -> Decelerate -> Stand (0.5s)
-- Both pipelines use the same source data, converted to their respective NPZ formats
+
+**⚠️ Preprocessing pipeline** (raw LAFAN1 data is not used directly):
+
+| Step | Purpose | Effect |
+|------|---------|--------|
+| **Trajectory straightening** | Reference clip had ~113° yaw drift over 20s; discriminator would learn to reward turning | Remove per-frame world yaw so forward direction is constant +X; joint-level motion preserved |
+| **L/R mirroring** | LAFAN1 subject has asymmetric gait; without mirroring, policy favors one leg | Duplicate trajectory with left/right joints swapped and lateral direction flipped |
+| **Synthetic standing frames** | Reference has almost no standing frames; policy collapses when commanded to stop | Insert ~27% standing frames computed from G1 default pose (Pinocchio FK, pelvis_z=0.777) |
+
+Final AMP reference file: `g1_run_and_stand.npz` — **1697 frames / 56.5 s** (73% running / 27% standing, both mirrored).
+Both pipelines (BeyondMimic and AMP) use this same preprocessed data, converted to their respective NPZ formats.
+See [`docs/amp_run_training_log.md`](docs/amp_run_training_log.md) §13–14 for the data-pipeline rationale and code refs.
 
 ## Project Structure
 
