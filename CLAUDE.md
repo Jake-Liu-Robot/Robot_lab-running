@@ -508,34 +508,65 @@ gradient_penalty = 5.0 (防止判别器过拟合)
 
 ---
 
-## MuJoCo Sim-to-Sim（本地）
+## MuJoCo Sim-to-Sim（本地，已验证）
 
-### G1 模型
+**验证结论**：Phase 7 的 20K AMP 策略在 MuJoCo 中完整复现 Isaac Lab eval 行为——ramp 模式下站立 → 加速 → 4 m/s 巡航 → 减速 → 站立全流程，巡航段 Δfwd < 0.5 m/s，Δh < 5 cm。
 
-```bash
-git clone https://github.com/google-deepmind/mujoco_menagerie.git
-# 使用: unitree_g1/g1_mjx.xml
+完整对齐清单、bug 诊断、两 ckpt 对比表：[`docs/sim2sim_validation.md`](docs/sim2sim_validation.md)
+
+### G1 MuJoCo 模型
+
+```
+/home/jake/Unitree_rl_gym/unitree_rl_gym/resources/robots/g1_description/g1_29dof_rev_1_0.xml
 ```
 
-### 对齐要点
+（不用 Menagerie 的 `g1_mjx.xml`——该版本关节子集不同、body merge 行为不同。沿用 unitree_rl_gym 的 MJCF 最接近 Isaac Lab 的 URDF。）
 
-| 项目 | Isaac Lab | MuJoCo | 转换 |
-|------|-----------|--------|------|
-| 关节顺序 | URDF | MJCF | 建立显式映射表 |
-| 四元数 | [x,y,z,w] | [w,x,y,z] | 重排列 |
-| 基座速度 | body frame | world frame | R^T @ vel |
-| PD 增益 | unitree.py | general actuator | gainprm/biasprm |
+### 关键对齐项（完整表见 sim2sim_validation.md）
 
-### 策略导出
+| 项目 | 值 / 来源 |
+|---|---|
+| 关节顺序 | Isaac Sim USD BFS：`L_hip_pitch, R_hip_pitch, waist_yaw, L_hip_roll, R_hip_roll, waist_roll, ...`（左右-waist 每层交错，**不是** URDF 原生的"左全腿-右全腿-waist"）|
+| PD 控制律 | `<general biastype="affine" gainprm="kp 0 0" biasprm="0 -kp -kd"/>` → `τ=kp(ctrl-qpos)-kd·qvel` |
+| PD 增益 | `unitree.py` 的 `STIFFNESS_7520_14/22/5020/...` 常量，所有 29 关节覆盖 |
+| Armature | `unitree.py ARMATURE_*` 表，所有 29 关节（2x5020 for ankles/waist_roll/pitch）|
+| 初始 pelvis z | 0.76 m（`init_state.pos.z`）|
+| 初始关节角 | `init_state.joint_pos` 里 12 个非零项，其余 0 |
+| Action offset/scale | `0.9 × MuJoCo jnt_range`（= Isaac Lab 的 `soft_joint_pos_limits`）|
+| rubber_hand body | 名字重映到 `wrist_yaw_link + (0.0415, ±0.003, 0)` offset（MJCF 合并了该 fixed-joint body）|
+| 物理 | `<option integrator="implicitfast" timestep="0.002"/>`，500Hz 物理 × 8 substeps/60Hz 控制 |
+| 观测 109 维 | `joint_pos(29)+joint_vel(29)+root_z(1)+tangent_normal(6)+key_body_rel(39)+progress(1)+root_vel_body(3)+cmd_vel(1)` |
 
-- BeyondMimic (rsl_rl): 自动导出 ONNX
-- AMP (skrl): `torch.onnx.export` 或 `torch.jit.save`
+### 策略导出（本地，纯 torch）
 
-### sim2sim 参考实现
+```bash
+python scripts/sim2sim/export_policy.py \
+    --checkpoint outputs/<run>/checkpoints/best_agent.pt \
+    --output     outputs/<run>/policy_exported.pt
+```
 
-- Mini-Pi-Plus_BeyondMimic: `scripts/sim2sim.py`（最接近）
-- unitree_rl_lab: `deploy/robots/g1_29dof/`（官方）
-- Humanoid-Gym: `sim2sim.py`（通用）
+- 输入：skrl 原生 `best_agent.pt`（~26 MB，嵌套 OrderedDict）
+- 输出：`policy_exported.pt`（~2.5 MB，只含 policy + obs normalizer）
+- 无 Isaac Lab / skrl 依赖，任意 `torch` 环境都能跑
+
+### 运行 sim2sim
+
+```bash
+conda activate unitree-rl
+python scripts/sim2sim/sim2sim_mujoco.py \
+    --policy outputs/<run>/policy_exported.pt \
+    --cmd_vel ramp --duration 20.0 --no_render
+```
+
+输出：`outputs/<run>/sim2sim/sim2sim_policy_exported_ramp.{mp4,csv}`（匹配 `eval_amp_run.py` 的 CSV 列）。
+
+### Isaac Lab 真实配置 dump（RunPod 上，环境更新后用来核对）
+
+```bash
+/isaac-sim/python.sh scripts/sim2sim/print_lab_order.py 2>&1 | tee /tmp/lab_order.txt
+```
+
+dump `robot.data.joint_names` / `body_names` / `soft_joint_pos_limits` / `default_joint_pos` / init 109-dim obs——任何 Isaac Lab 升级或 `unitree.py` 改动都应重跑以验证 sim2sim 的硬编码常量仍正确。
 
 ---
 
