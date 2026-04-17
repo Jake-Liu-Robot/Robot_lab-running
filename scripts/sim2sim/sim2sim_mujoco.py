@@ -122,6 +122,37 @@ REF_BODY_NAME = "pelvis"
 # Isaac Lab's action_offset/action_scale uses soft limits = factor × hard range.
 SOFT_JOINT_POS_LIMIT_FACTOR = 0.9
 
+# Joint armature from unitree.py UNITREE_G1_29DOF_CFG.actuators[*].armature.
+# Each motor type has its own rotor inertia; mismatched armature changes the
+# effective joint mass seen by the PD controller (and the policy trained on it).
+_ARM_7520_14 = 0.010177520   # hip_pitch, hip_yaw, waist_yaw
+_ARM_7520_22 = 0.025101925   # hip_roll, knee
+_ARM_5020    = 0.003609725   # shoulder_*, elbow, wrist_roll
+_ARM_5020_x2 = 2.0 * _ARM_5020   # ankle_*, waist_roll, waist_pitch (2 motors parallel)
+_ARM_4010    = 0.004250       # wrist_pitch, wrist_yaw
+
+JOINT_ARMATURE = {}
+for jn in ("left_hip_pitch_joint", "right_hip_pitch_joint",
+           "left_hip_yaw_joint",   "right_hip_yaw_joint",
+           "waist_yaw_joint"):
+    JOINT_ARMATURE[jn] = _ARM_7520_14
+for jn in ("left_hip_roll_joint", "right_hip_roll_joint",
+           "left_knee_joint",     "right_knee_joint"):
+    JOINT_ARMATURE[jn] = _ARM_7520_22
+for jn in ("left_ankle_pitch_joint", "right_ankle_pitch_joint",
+           "left_ankle_roll_joint",  "right_ankle_roll_joint",
+           "waist_roll_joint",       "waist_pitch_joint"):
+    JOINT_ARMATURE[jn] = _ARM_5020_x2
+for jn in ("left_shoulder_pitch_joint", "right_shoulder_pitch_joint",
+           "left_shoulder_roll_joint",  "right_shoulder_roll_joint",
+           "left_shoulder_yaw_joint",   "right_shoulder_yaw_joint",
+           "left_elbow_joint",          "right_elbow_joint",
+           "left_wrist_roll_joint",     "right_wrist_roll_joint"):
+    JOINT_ARMATURE[jn] = _ARM_5020
+for jn in ("left_wrist_pitch_joint", "right_wrist_pitch_joint",
+           "left_wrist_yaw_joint",   "right_wrist_yaw_joint"):
+    JOINT_ARMATURE[jn] = _ARM_4010
+
 # Initial state at reset (from unitree.py UNITREE_G1_29DOF_CFG.init_state).
 # reset_strategy="default" in g1_amp_run_env_cfg.py, so lab eval starts here.
 INIT_PELVIS_HEIGHT = 0.76
@@ -177,20 +208,31 @@ def setup_mujoco_model(xml_path, offwidth=1280, offheight=720,
     with open(xml_path, "r") as f:
         xml_content = f.read()
 
-    # Build actuator XML using <general> for proper PD control
-    # force = kp * (ctrl - qpos) - kd * qvel
+    # Build actuator XML using <general> for proper PD position control.
+    # MUST set biastype="affine" so biasprm is applied (default "none" ignores it).
+    # Resulting force: gain*ctrl + biasprm[0] + biasprm[1]*qpos + biasprm[2]*qvel
+    #               =   kp*ctrl +     0      +     -kp*qpos   +     -kd*qvel
+    #               =   kp*(ctrl - qpos) - kd*qvel                   ← PD
     actuator_xml = "  <actuator>\n"
     for jn in JOINT_NAMES:
         kp, kd = PD_GAINS[jn]
         actuator_xml += (
             f'    <general name="{jn}_actuator" joint="{jn}" '
+            f'gaintype="fixed" biastype="affine" '
             f'gainprm="{kp} 0 0" biasprm="0 -{kp} -{kd}" '
-            f'ctrlrange="-3.14159 3.14159"/>\n'
+            f'ctrllimited="false"/>\n'
         )
     actuator_xml += "  </actuator>"
 
-    # Replace empty actuator section
-    xml_content = xml_content.replace("  <actuator>\n  </actuator>", actuator_xml)
+    # Replace the WHOLE existing <actuator>...</actuator> block (the G1 XML ships
+    # with plain <motor> actuators that the old code silently left in place).
+    import re
+    xml_content, n = re.subn(
+        r"<actuator>.*?</actuator>", actuator_xml.strip(), xml_content, count=1, flags=re.DOTALL
+    )
+    if n == 0:
+        # Fallback: no existing block, insert one
+        xml_content = xml_content.replace("<worldbody>", actuator_xml + "\n  <worldbody>", 1)
 
     # Inject/override <option> with implicit integrator + small timestep so the
     # stiff PD controllers don't blow up (PhysX in Isaac Lab substeps internally;
@@ -234,6 +276,14 @@ def setup_mujoco_model(xml_path, offwidth=1280, offheight=720,
     model = mujoco.MjModel.from_xml_path(tmp_xml)
     os.remove(tmp_xml)
     data = mujoco.MjData(model)
+
+    # Apply per-joint armature (matches Isaac Lab's ImplicitActuator.armature for
+    # hips + knees). MuJoCo XML doesn't have these, so set them on the model.
+    for jn, arm in JOINT_ARMATURE.items():
+        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn)
+        if jid >= 0:
+            dof_adr = model.jnt_dofadr[jid]
+            model.dof_armature[dof_adr] = arm
 
     # timestep/integrator already set via XML <option>. Leave as-is.
     return model, data, xml_content
