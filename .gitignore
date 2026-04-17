@@ -44,6 +44,38 @@ pyrightconfig.json
 MUJOCO_LOG.TXT
 *.log
 
+# Unrelated upstream content (not tracked on GitHub)
+# Non-Unitree robot assets
+source/robot_lab/data/Robots/agibot/
+source/robot_lab/data/Robots/booster/
+source/robot_lab/data/Robots/ddt/
+source/robot_lab/data/Robots/deeprobotics/
+source/robot_lab/data/Robots/fftai/
+source/robot_lab/data/Robots/magiclab/
+source/robot_lab/data/Robots/openloong/
+source/robot_lab/data/Robots/roboparty/
+source/robot_lab/data/Robots/robotera/
+source/robot_lab/data/Robots/zsibot/
+# Quadruped Unitree (only G1 used)
+source/robot_lab/data/Robots/unitree/a1_description/
+source/robot_lab/data/Robots/unitree/b2_description/
+source/robot_lab/data/Robots/unitree/b2w_description/
+source/robot_lab/data/Robots/unitree/go2_description/
+source/robot_lab/data/Robots/unitree/go2w_description/
+# AMASS dataset exploration
+amass_g1_running/running_candidates.txt
+amass_g1_running/scripts/
+# LAFAN1 dataset CSVs (download, not source)
+lafan1_g1/g1/*.csv
+# CusRL (not used in this project)
+scripts/reinforcement_learning/cusrl/
+# Upstream Docker / CI (not used in this fork)
+docker/
+.dockerignore
+.github/
+.pre-commit-config.yaml
+README_original.md
+
 # Datasets - non-G1 data
 lafan1_g1/h1/
 lafan1_g1/h1_2/

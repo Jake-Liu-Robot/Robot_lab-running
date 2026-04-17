@@ -2,6 +2,17 @@
 
 Training a Unitree G1 (29-DOF) humanoid robot to complete a **full running cycle** (stand -> accelerate -> sustained running -> decelerate -> stop) using two motion imitation architectures, based on [robot_lab](https://github.com/fan-ziqi/robot_lab).
 
+## Current Status (2026-04-17)
+
+**AMP-Run Route B — ✅ milestone achieved.** After 7 tuning phases (see `docs/amp_run_training_log.md`), the Phase 7 policy (heading -10 cos reward) tracks **4 m/s cruise with 0.043 m/s error** and reproduces in MuJoCo sim-to-sim within 0.5 m/s.
+- Latest checkpoint: `outputs/run7_phase7_latest_20k/checkpoints/agent_20000.pt`
+- Eval video: `outputs/run7_phase7_latest_20k/videos/curated_agent20k/ramp.mp4`
+- Sim-to-sim validation: [`docs/sim2sim_validation.md`](docs/sim2sim_validation.md)
+
+Known issues (next-iteration targets): lateral drift during 8–12 s cruise, single-shock at deceleration step. See `docs/amp_run_training_log.md` §17.8.
+
+**BeyondMimic Route A — planned.** Code is in the repo but not yet trained.
+
 ## Two Architectures
 
 ### BeyondMimic (Trajectory Tracking)
@@ -20,7 +31,7 @@ Style-based imitation via a learned discriminator + velocity command tracking. T
 
 - **RL framework**: skrl (PPO + AMP)
 - **Workflow**: Direct (Isaac Lab)
-- **Reward**: `0.7 x task_reward + 0.3 x style_reward`
+- **Reward**: `0.5 x task_reward + 0.5 x style_reward` (rebalanced in Phase 4 from 0.7/0.3)
   - Task: velocity command tracking (random [0, 4] m/s) + regularization (upright, height, lateral, yaw, action rate)
   - Style: discriminator trained on reference running data (3-frame observation history)
   - No env-side imitation reward — discriminator handles all style enforcement
@@ -111,6 +122,14 @@ Requires RunPod with NGC Docker image `nvcr.io/nvidia/isaac-lab:2.3.2`.
 | Sim-to-Sim | MuJoCo + Menagerie G1 model |
 | Motion Data | LAFAN1 Retargeted for G1 (30 FPS) |
 | Robot | Unitree G1 29-DOF |
+
+## Documentation Map
+
+- [`CLAUDE.md`](CLAUDE.md) — Project setup, RunPod config, full code structure
+- [`docs/amp_run_training_log.md`](docs/amp_run_training_log.md) — Complete tuning narrative (Run 1–7 + Phase 1–7)
+- [`docs/sim2sim_validation.md`](docs/sim2sim_validation.md) — MuJoCo sim-to-sim alignment notes
+- [`docs/reward_tuning_guide.md`](docs/reward_tuning_guide.md) — Methodology for reward adjustments
+- [`outputs/README.md`](outputs/README.md) — Per-run checkpoint + eval archive (local only)
 
 ## References
 
