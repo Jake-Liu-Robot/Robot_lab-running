@@ -69,5 +69,27 @@ print("=== Key body names (in order used by obs) ===", flush=True)
 for k, idx in enumerate(u.key_body_indexes):
     print(f"key[{k}] -> body_names[{idx}] = {u.robot.data.body_names[idx]}", flush=True)
 
+log("Dumping Isaac Lab's initial 109-dim policy observation (cmd_vel = 0.0)...")
+# Force cmd_vel=0 so the comparison to sim2sim --cmd_vel 0.0 is apples-to-apples.
+obs_dict, _ = env.reset()
+u.velocity_commands[:] = 0.0
+u.command_time_left[:] = 999.0
+# Recompute obs with the overridden cmd (otherwise it still holds the pre-override random cmd)
+obs_new = u._get_observations()
+o = obs_new["policy"][0].detach().cpu().numpy()
+h = u.robot.data.body_pos_w[0, u.ref_body_index, 2].item()
+vw = u.robot.data.body_lin_vel_w[0, u.ref_body_index].detach().cpu().numpy()
+qp = u.robot.data.joint_pos[0].detach().cpu().numpy()
+qv = u.robot.data.joint_vel[0].detach().cpu().numpy()
+
+print(f"=== INIT_STATE h={h:.4f} body_lin_vel_w=[{vw[0]:+.4f},{vw[1]:+.4f},{vw[2]:+.4f}] ===", flush=True)
+print("=== INIT_JOINT_POS ===", flush=True)
+for i, n in enumerate(u.robot.data.joint_names):
+    print(f"{i}: {n} qpos={qp[i]:+.6f} qvel={qv[i]:+.6f}", flush=True)
+print("=== INIT_OBS (109-dim, cmd_vel=0.0) ===", flush=True)
+for i, x in enumerate(o):
+    print(f"obs[{i}]={x:+.6f}", flush=True)
+print("=== END_INIT_OBS ===", flush=True)
+
 log("Done. Closing app.")
 app.close()
