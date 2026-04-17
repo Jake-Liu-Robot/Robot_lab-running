@@ -4,6 +4,13 @@
 
 **结论先放**：`outputs/run7_phase7_cont1_20k/policy_exported.pt` 和 `run7_phase7_latest_20k/policy_exported.pt` 在 MuJoCo 中**完整复现** Isaac Lab eval 的行为——ramp 模式（cmd 0 m/s→4 m/s→0）下均能完成**站立 → 加速 → 4 m/s 巡航 → 减速 → 站立**的完整周期。
 
+**对比前提（重要）**：两侧都**关闭了所有域随机化**，对比反映的是物理引擎本质差异，不是噪声。
+
+- Lab 侧：`eval_amp_run.py` 强制 `env_cfg.push_enable = obs_noise_enable = pd_gain_random_enable = joint_pos_offset_enable = added_mass_enable = False`。
+- sim2sim 侧：MuJoCo 确定性仿真，本就无这些随机化。
+
+**MuJoCo XML 来源**：`/home/jake/Unitree_rl_gym/unitree_rl_gym/resources/robots/g1_description/g1_29dof_rev_1_0.xml`（从 `unitreerobotics/unitree_rl_gym` 的资产，与 Isaac Lab 用的 URDF 同源）。不要用 Menagerie 的 `unitree_g1/g1_mjx.xml`——那版 body merge 和关节子集不同。
+
 ---
 
 ## 目录

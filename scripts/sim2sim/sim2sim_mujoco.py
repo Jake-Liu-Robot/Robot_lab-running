@@ -5,22 +5,36 @@ Loads exported policy (.pt from export_policy.py), runs in MuJoCo.
 No dependency on Isaac Lab or skrl — pure PyTorch + MuJoCo.
 
 USAGE (local machine):
+    # Ramp test (matches eval_amp_run.py --cmd_vel ramp)
     python scripts/sim2sim/sim2sim_mujoco.py \
-        --policy policy_exported.pt \
-        --xml_path <path_to_g1_29dof_rev_1_0.xml> \
-        --cmd_vel 4.0
+        --policy outputs/<run>/policy_exported.pt \
+        --cmd_vel ramp --duration 20.0 --no_render
 
-    # Ramp test
+    # Fixed velocity
     python scripts/sim2sim/sim2sim_mujoco.py \
-        --policy policy_exported.pt \
-        --cmd_vel ramp
+        --policy outputs/<run>/policy_exported.pt \
+        --cmd_vel 4.0 --no_render
 
-REQUIREMENTS:
-    pip install mujoco torch numpy
+    # Override MuJoCo XML (default: /home/jake/Unitree_rl_gym/.../g1_29dof_rev_1_0.xml)
+    python ... --xml_path /path/to/g1.xml
+
+OUTPUTS (in <policy_dir>/sim2sim/ by default):
+    sim2sim_<ckpt>_<mode>.mp4  — 1280x720 @ 60fps tracking video
+    sim2sim_<ckpt>_<mode>.csv  — step, time_s, cmd_vel, fwd_vel, lateral_vel,
+                                 pelvis_height, reward_step (matches eval_amp_run.py)
+
+REQUIREMENTS (all installed in conda `unitree-rl`):
+    pip install mujoco torch numpy imageio imageio-ffmpeg
+
+SEE ALSO:
+    scripts/sim2sim/export_policy.py  — skrl ckpt → standalone policy.pt
+    scripts/sim2sim/print_lab_order.py — RunPod diagnostic (joint/body/action_scale)
+    docs/sim2sim_validation.md        — validation report vs Isaac Lab eval
 """
 
 import argparse
 import os
+import re
 import time
 
 import mujoco
@@ -225,8 +239,7 @@ def setup_mujoco_model(xml_path, offwidth=1280, offheight=720,
     actuator_xml += "  </actuator>"
 
     # Replace the WHOLE existing <actuator>...</actuator> block (the G1 XML ships
-    # with plain <motor> actuators that the old code silently left in place).
-    import re
+    # with plain <motor> actuators that str.replace on an empty block would miss).
     xml_content, n = re.subn(
         r"<actuator>.*?</actuator>", actuator_xml.strip(), xml_content, count=1, flags=re.DOTALL
     )
@@ -241,7 +254,6 @@ def setup_mujoco_model(xml_path, offwidth=1280, offheight=720,
         f'  <option timestep="{physics_timestep}" integrator="{integrator}"/>\n'
     )
     if "<option" in xml_content:
-        import re
         xml_content = re.sub(r"<option[^/>]*/>", option_block.strip(), xml_content, count=1)
     else:
         xml_content = xml_content.replace(
@@ -252,7 +264,6 @@ def setup_mujoco_model(xml_path, offwidth=1280, offheight=720,
     # MuJoCo only allows one <global> element inside <visual>; if one already
     # exists (e.g. Unitree G1 XML has azimuth/elevation there), add the offwidth
     # /offheight attributes into it rather than inserting a second element.
-    import re
     global_pat = re.compile(r"<global([^/>]*)/>")
     m = global_pat.search(xml_content)
     if m:
@@ -266,15 +277,15 @@ def setup_mujoco_model(xml_path, offwidth=1280, offheight=720,
         )
         xml_content = xml_content.replace("<worldbody>", visual_block + "  <worldbody>", 1)
 
-    # Write modified XML to temp file (same directory for mesh resolution)
-    import os
-    import tempfile
+    # Write modified XML to a temp file inside the XML dir so mesh paths resolve.
     xml_dir = os.path.dirname(os.path.abspath(xml_path))
     tmp_xml = os.path.join(xml_dir, "_sim2sim_temp.xml")
     with open(tmp_xml, "w") as f:
         f.write(xml_content)
-    model = mujoco.MjModel.from_xml_path(tmp_xml)
-    os.remove(tmp_xml)
+    try:
+        model = mujoco.MjModel.from_xml_path(tmp_xml)
+    finally:
+        os.remove(tmp_xml)
     data = mujoco.MjData(model)
 
     # Apply per-joint armature (matches Isaac Lab's ImplicitActuator.armature for
@@ -419,23 +430,14 @@ def compute_observation(model, data, joint_qpos_ids, joint_qvel_ids,
 # ============================================================
 
 def compute_action_scaling(model, joint_qpos_ids):
-    """Compute action offset and scale from joint limits (matches Isaac Lab)."""
-    lower = np.array([model.jnt_range[model.jnt_qposadr == i, 0].item()
-                      if (model.jnt_qposadr == i).any()
-                      else -3.14 for i in joint_qpos_ids], dtype=np.float32)
-    upper = np.array([model.jnt_range[model.jnt_qposadr == i, 1].item()
-                      if (model.jnt_qposadr == i).any()
-                      else 3.14 for i in joint_qpos_ids], dtype=np.float32)
+    """Compute action offset and scale from joint limits (matches Isaac Lab).
 
-    # Try reading directly from joint range
-    jnt_ids = []
-    for jn in JOINT_NAMES:
-        jid = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn)
-        jnt_ids.append(jid)
-
+    Note: caller is expected to multiply scale by SOFT_JOINT_POS_LIMIT_FACTOR
+    (0.9) to mirror Isaac Lab's `self.robot.data.soft_joint_pos_limits`.
+    """
+    jnt_ids = [mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_JOINT, jn) for jn in JOINT_NAMES]
     lower = np.array([model.jnt_range[jid, 0] for jid in jnt_ids], dtype=np.float32)
     upper = np.array([model.jnt_range[jid, 1] for jid in jnt_ids], dtype=np.float32)
-
     action_offset = 0.5 * (upper + lower)
     action_scale = upper - lower
     return action_offset, action_scale
@@ -673,14 +675,15 @@ def main():
         for _ in range(physics_substeps):
             mujoco.mj_step(model, data)
 
-        # --- Extract state for logging (match lab: body_lin_vel_w world X as fwd_vel) ---
+        # --- Extract state for logging (match eval_amp_run.py CSV format) ---
+        # Lab: root_vel_w = data.body_lin_vel_w[pelvis];
+        #      fwd_vel = root_vel_w[0] (world X);  lat_vel = root_vel_w[1] (world Y).
+        # We use qvel[0:3] which is the free-joint's world-frame linear velocity
+        # of the pelvis link origin — same quantity lab logs.
         root_pos = data.xpos[ref_body_id].copy()
-        root_quat = data.xquat[ref_body_id].copy()
-        root_vel_w = data.qvel[0:3].copy()  # world-frame linear velocity of pelvis
-        quat_inv = np.array([root_quat[0], -root_quat[1], -root_quat[2], -root_quat[3]])
-        root_vel_b = quat_apply(quat_inv, root_vel_w)
-        fwd_vel = float(root_vel_w[0])    # lab logs world X velocity as fwd_vel
-        lat_vel = float(root_vel_w[1])    # lab logs world Y as lateral_vel
+        root_vel_w = data.qvel[0:3].copy()
+        fwd_vel = float(root_vel_w[0])
+        lat_vel = float(root_vel_w[1])
         pelvis_h = float(root_pos[2])
 
         # velocity-tracking reward (matches g1_amp_run_env.py: 1.5 * exp(-4 * err^2))
