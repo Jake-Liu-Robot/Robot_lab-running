@@ -9,7 +9,7 @@
 
 **选择 robot_lab**：一个仓库、一套 G1 资产、一个 Isaac Lab 安装、两条训练管线，实验控制变量最少。
 
-**GitHub 同步仓库**: https://github.com/Jake-Liu-Robot/Robot_lab-running.git
+**GitHub 同步仓库**: https://github.com/Jake-Liu-Robot/Unitree_G1_High-speed-Running.git
 
 ---
 
