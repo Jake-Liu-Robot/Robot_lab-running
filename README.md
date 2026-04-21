@@ -6,8 +6,17 @@ Training a Unitree G1 (29-DOF) humanoid robot to complete a **full running cycle
 
 **AMP-Run Route B — ✅ milestone achieved.** After 7 tuning phases (see `docs/amp_run_training_log.md`), the Phase 7 policy (heading -10 cos reward) tracks **4 m/s cruise with 0.043 m/s error** and reproduces in MuJoCo sim-to-sim within 0.5 m/s.
 - Latest checkpoint: `outputs/run7_phase7_latest_20k/checkpoints/agent_20000.pt`
-- Eval video: `outputs/run7_phase7_latest_20k/videos/curated_agent20k/ramp.mp4`
 - Sim-to-sim validation: [`docs/sim2sim_validation.md`](docs/sim2sim_validation.md)
+
+### Demo — Phase 7 ramp command (0 → 4 → 0 m/s)
+
+**Isaac Lab evaluation** (training environment)
+
+https://github.com/Jake-Liu-Robot/Unitree_G1_High-speed-Running/raw/main/docs/media/isaac_lab_ramp.mp4
+
+**MuJoCo sim-to-sim** (same exported policy, independent physics)
+
+https://github.com/Jake-Liu-Robot/Unitree_G1_High-speed-Running/raw/main/docs/media/mujoco_sim2sim_ramp.mp4
 
 Known issues (next-iteration targets): lateral drift during 8–12 s cruise, single-shock at deceleration step. See `docs/amp_run_training_log.md` §17.8.
 
