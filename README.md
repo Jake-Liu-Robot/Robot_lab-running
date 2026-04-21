@@ -10,13 +10,15 @@ Training a Unitree G1 (29-DOF) humanoid robot to complete a **full running cycle
 
 ### Demo — Phase 7 ramp command (0 → 4 → 0 m/s)
 
+Clips below show the 6–16 s window of the 20 s ramp (accel → 4 m/s cruise → start of decel). Full MP4s: [`isaac_lab_ramp.mp4`](docs/media/isaac_lab_ramp.mp4) · [`mujoco_sim2sim_ramp.mp4`](docs/media/mujoco_sim2sim_ramp.mp4).
+
 **Isaac Lab evaluation** (training environment)
 
-<video src="https://github.com/Jake-Liu-Robot/Unitree_G1_High-speed-Running/raw/main/docs/media/isaac_lab_ramp.mp4" controls width="640"></video>
+![Isaac Lab evaluation](docs/media/isaac_lab_ramp.gif)
 
 **MuJoCo sim-to-sim** (same exported policy, independent physics)
 
-<video src="https://github.com/Jake-Liu-Robot/Unitree_G1_High-speed-Running/raw/main/docs/media/mujoco_sim2sim_ramp.mp4" controls width="640"></video>
+![MuJoCo sim-to-sim](docs/media/mujoco_sim2sim_ramp.gif)
 
 Known issues (next-iteration targets): lateral drift during 8–12 s cruise, single-shock at deceleration step. See `docs/amp_run_training_log.md` §17.8.
 
