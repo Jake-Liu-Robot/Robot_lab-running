@@ -12,11 +12,11 @@ Training a Unitree G1 (29-DOF) humanoid robot to complete a **full running cycle
 
 **Isaac Lab evaluation** (training environment)
 
-https://github.com/Jake-Liu-Robot/Unitree_G1_High-speed-Running/raw/main/docs/media/isaac_lab_ramp.mp4
+<video src="https://github.com/Jake-Liu-Robot/Unitree_G1_High-speed-Running/raw/main/docs/media/isaac_lab_ramp.mp4" controls width="640"></video>
 
 **MuJoCo sim-to-sim** (same exported policy, independent physics)
 
-https://github.com/Jake-Liu-Robot/Unitree_G1_High-speed-Running/raw/main/docs/media/mujoco_sim2sim_ramp.mp4
+<video src="https://github.com/Jake-Liu-Robot/Unitree_G1_High-speed-Running/raw/main/docs/media/mujoco_sim2sim_ramp.mp4" controls width="640"></video>
 
 Known issues (next-iteration targets): lateral drift during 8–12 s cruise, single-shock at deceleration step. See `docs/amp_run_training_log.md` §17.8.
 
